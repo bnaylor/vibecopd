@@ -61,28 +61,28 @@ Speed matters — `vibecop` is in your agent's critical path. Measured on M4 Pro
 
 ## Quickstart
 
+**First run —** `vibecop setup` walks you through everything:
+
 ```sh
-# Install
-go install github.com/bnaylor/vibecop@latest
-
-# Configure (~/.vibecop/config.toml)
-vibecop init --harness claude   # generate Guardian prompt for current project
-
-# Install hooks into your coding harness
-vibecop install --harness claude
-
-# Start the daemon
-vibecop start
-
-# Watch what's happening (optional)
-vibecop tui
+vibecop setup       # interactive wizard: provider, model, timeout, API key
+vibecop test        # verify the LLM endpoint works
+vibecop start       # boot the daemon (runs in foreground; Ctrl+C to stop)
+vibecop tui         # (in another terminal) watch verdicts in real-time
 ```
 
----
+When you're ready to hook it up to a coding agent:
+
+```sh
+vibecop install --all      # wire hooks into Claude Code and Gemini CLI
+vibecop init --harness claude   # generate Guardian prompt for this project
+```
+
+`vibecop` will also nudge you toward `vibecop setup` if you run a command
+without a configuration file.
 
 ## Config
 
-`~/.vibecop/config.toml`:
+`~/.vibecop/config.toml` — created by `vibecop setup`, or write it yourself:
 
 **Haiku (recommended):**
 ```toml
@@ -108,7 +108,7 @@ model      = "gemini-2.5-flash"
 api_key    = "AIza..."
 ```
 
-**Local Ollama (no API key needed, but slower):**
+**Local Ollama (no API key needed):**
 ```toml
 [model]
 endpoint   = "http://localhost:11434/v1/chat/completions"
@@ -117,7 +117,7 @@ model      = "qwen3:14b"
 api_key    = ""
 ```
 
-Test your connection: `vibecop test`
+`vibecop setup` auto-detects Ollama models if Ollama is running locally.
 
 ---
 
@@ -137,6 +137,7 @@ Attaches to a running daemon and shows:
 ## Commands
 
 ```
+vibecop setup              Interactive first-time setup wizard
 vibecop start              Start the background daemon
 vibecop stop               Stop it
 vibecop status             Show daemon status and config
@@ -158,6 +159,6 @@ This project grew out of experimentation with the AI second-opinion concept — 
 
 ## Status
 
-Pre-release. The spec is finalized; implementation is underway.
+Implementation complete. See [`docs/spec.md`](docs/spec.md) for the full design specification.
 
 See [`docs/spec.md`](docs/spec.md) for the full design specification.

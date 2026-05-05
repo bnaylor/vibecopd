@@ -30,7 +30,22 @@ Runs in the background; attach the TUI to monitor activity.`,
 		}
 		var err error
 		vibecopCfg, err = config.Load(path)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// First-run detection: if no config exists and the user didn't
+		// run 'setup', nudge them.
+		if cfgFile == "" {
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				if cmd.Name() != "setup" && cmd.Name() != "help" && cmd.Name() != "completion" {
+					fmt.Fprintf(os.Stderr, "vibecop: no configuration found at %s\n", path)
+					fmt.Fprintf(os.Stderr, "  Run 'vibecop setup' to configure your endpoint.\n")
+					fmt.Fprintf(os.Stderr, "  Or create the file manually.\n\n")
+				}
+			}
+		}
+		return nil
 	},
 }
 
