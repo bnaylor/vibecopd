@@ -1,0 +1,16 @@
+⏺ Fixed and pushed. Once you land the open-vibe-island PR you can add the cross-reference back — it'll actually be a
+  nice story to tell ("vibecopd is a headless alternative to the VibeCop extension in Open Vibe Island").
+
+❯ i think we're gonna not actually push it as is, but whittle that down to a *bridge* that talks to vibecopd.  and
+  you can still use our TUI, etc.  dope, right?
+
+⏺ That's genuinely elegant. Open Vibe Island becomes just another client on the socket — it sends permission_request,
+  gets a verdict back, and can subscribe via tui_subscribe to drive its own activity panel. The daemon, the Guardian
+  prompts, the audit logs, all of it lives in vibecopd and every frontend shares it.
+
+  The bridge PR becomes tiny: replace Open Vibe Island's VibeCop LLM call with a socket write to
+  ~/.vibecopd/daemon.sock, fall back to its existing behavior if the socket isn't there. The GUI users get the same AI
+   second-opinion but now their decisions show up in your TUI too. One audit log across both interfaces.
+
+  Worth noting in the spec and README once the bridge exists — "Open Vibe Island users: install the vibecopd bridge
+  extension to get GUI + daemon in one setup" is a compelling on-ramp.
