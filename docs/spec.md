@@ -47,10 +47,10 @@ activity_window = 10   # recent verdicts sent as context; default 10
 audit_enabled = false  # write permanent audit logs; default off
 
 [model]
-endpoint   = "http://localhost:11434/v1/chat/completions"
-api_format = "openai"   # "openai" or "anthropic"
-model      = "qwen3:14b"
-api_key    = ""         # optional for Ollama; required for cloud
+endpoint   = "https://api.anthropic.com/v1/messages"
+api_format = "anthropic"   # "openai" or "anthropic"
+model      = "claude-haiku-4-5"
+api_key    = ""             # required for cloud endpoints
 ```
 
 `api_format` controls request shape and auth headers:
@@ -59,19 +59,22 @@ api_key    = ""         # optional for Ollama; required for cloud
 
 ### Recommended models
 
-Speed matters — `vibecop` is in the critical path for a blocking permission check. A 14B model is more than capable for structured verdict generation.
+Speed matters — `vibecop` is in the critical path for a blocking permission check. Measured on M4 Pro 48GB.
 
-**Local inference via Ollama:**
+**Cloud (recommended):**
 
-| RAM    | Model                 | Notes |
-|--------|-----------------------|-------|
-| 16 GB  | `mistral-nemo:latest` | Fast, good instruction following |
-| 32 GB  | `qwen3:14b`           | Strong code/dev reasoning; recommended default. `think: false` suppresses CoT tokens. |
-| 64 GB+ | `qwen3:32b` or `gemma3:27b` | Approaches cloud quality |
+| Model | Format | Endpoint | Latency | Notes |
+|-------|--------|----------|---------|-------|
+| `claude-haiku-4-5` | `anthropic` | `https://api.anthropic.com/v1/messages` | ~1.7s | **Recommended default.** Consistently beats the user to the approval prompt. |
+| `gemini-2.5-flash` | `openai` | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | TBD | Natural choice for Gemini CLI users or Google-only environments. |
 
-**Cloud:**
-- `claude-haiku-4-5` via Anthropic format — fast, cheap, strong developer-workflow understanding. Endpoint: `https://api.anthropic.com/v1/messages`
-- `gemini-2.5-flash` via OpenAI-compatible format. Endpoint: `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`
+**Local inference via Ollama (slower than cloud on typical hardware):**
+
+| RAM    | Model                 | Latency | Notes |
+|--------|-----------------------|---------|-------|
+| 16 GB  | `mistral-nemo:latest` | —       | Untested |
+| 32 GB  | `qwen3:14b`           | ~12.9s  | Strong code/dev reasoning. `think: false` suppresses CoT tokens. |
+| 64 GB+ | `qwen3:32b` or `gemma3:27b` | —  | Untested |
 
 ### Thinking control (Ollama)
 

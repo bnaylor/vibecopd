@@ -20,7 +20,7 @@ coding agent  →  PreToolUse hook  →  vibecop daemon  →  LLM
                                     deny: same, but louder
 ```
 
-The hook is a one-liner installed into your harness config. The daemon runs in the background. The LLM can be a local Ollama model (near-zero cost, ~300ms latency) or a cloud endpoint. If the daemon crashes or times out, the hook fails open — your agent is never blocked by `vibecop`'s own problems.
+The hook is a one-liner installed into your harness config. The daemon runs in the background. The LLM can be a local Ollama model (near-zero cost, ~13s latency on M4 Pro) or a cloud endpoint like Haiku (~1.7s). If the daemon crashes or times out, the hook fails open — your agent is never blocked by `vibecop`'s own problems.
 
 ---
 
@@ -42,19 +42,20 @@ The hook is a one-liner installed into your harness config. The daemon runs in t
 
 ## Recommended models
 
-Speed matters — `vibecop` is in your agent's critical path.
+Speed matters — `vibecop` is in your agent's critical path. Measured on M4 Pro 48GB:
 
-**Local (Ollama):**
+**Cloud (recommended):**
+| Model | Latency | Notes |
+|-------|---------|-------|
+| `claude-haiku-4-5` | ~1.7s | **Recommended default.** Fast enough to beat you to the prompt. Anthropic API. |
+| `gemini-2.5-flash` | TBD | Natural choice if you're running Gemini CLI. Google AI API. |
 
-| RAM | Model | Notes |
-|-----|-------|-------|
-| 16 GB | `mistral-nemo:latest` | Fast, solid |
-| 32 GB | `qwen3:14b` | Recommended default. CoT disabled automatically. |
-| 64 GB+ | `qwen3:32b` or `gemma3:27b` | Approaches cloud quality |
-
-**Cloud:**
-- `claude-haiku-4-5` (Anthropic API) — fast, cheap, understands developer workflows
-- `gemini-2.5-flash` (Gemini OpenAI-compatible endpoint) — also excellent
+**Local (Ollama) — slower than cloud on typical hardware:**
+| RAM | Model | Latency | Notes |
+|-----|-------|---------|-------|
+| 16 GB | `mistral-nemo:latest` | — | Untested |
+| 32 GB | `qwen3:14b` | ~12.9s | CoT disabled automatically. Noticeably slow. |
+| 64 GB+ | `qwen3:32b` or `gemma3:27b` | — | Untested |
 
 ---
 
@@ -83,6 +84,7 @@ vibecop tui
 
 `~/.vibecop/config.toml`:
 
+**Haiku (recommended):**
 ```toml
 [daemon]
 enabled         = true
@@ -91,8 +93,26 @@ activity_window = 10
 audit_enabled   = false
 
 [model]
+endpoint   = "https://api.anthropic.com/v1/messages"
+api_format = "anthropic"
+model      = "claude-haiku-4-5"
+api_key    = "sk-ant-..."
+```
+
+**Gemini Flash (for Gemini CLI users):**
+```toml
+[model]
+endpoint   = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+api_format = "openai"
+model      = "gemini-2.5-flash"
+api_key    = "AIza..."
+```
+
+**Local Ollama (no API key needed, but slower):**
+```toml
+[model]
 endpoint   = "http://localhost:11434/v1/chat/completions"
-api_format = "openai"    # or "anthropic"
+api_format = "openai"
 model      = "qwen3:14b"
 api_key    = ""
 ```
