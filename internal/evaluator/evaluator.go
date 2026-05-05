@@ -30,8 +30,12 @@ type VerdictEntry struct {
 	Verdict string `json:"verdict"`
 }
 
-const apiFormatOpenAI = "openai"
-const apiFormatAnthropic = "anthropic"
+const (
+	apiFormatOpenAI    = "openai"
+	apiFormatAnthropic = "anthropic"
+	HarnessClaude      = "claude"
+	HarnessGemini      = "gemini"
+)
 
 // Client evaluates tool-use requests by calling an LLM.
 type Client struct {
