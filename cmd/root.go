@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/bnaylor/vibecop/internal/config"
+	"github.com/bnaylor/vibecop/internal/setup"
 	"github.com/spf13/cobra"
 )
 
@@ -34,14 +35,17 @@ Runs in the background; attach the TUI to monitor activity.`,
 			return err
 		}
 
-		// First-run detection: if no config exists and the user didn't
-		// run 'setup', nudge them.
+		// First-run: auto-launch setup for any command that needs config.
 		if cfgFile == "" {
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				if cmd.Name() != "setup" && cmd.Name() != "help" && cmd.Name() != "completion" {
-					fmt.Fprintf(os.Stderr, "vibecop: no configuration found at %s\n", path)
-					fmt.Fprintf(os.Stderr, "  Run 'vibecop setup' to configure your endpoint.\n")
-					fmt.Fprintf(os.Stderr, "  Or create the file manually.\n\n")
+			if _, staterr := os.Stat(path); os.IsNotExist(staterr) {
+				name := cmd.Name()
+				if name != "setup" && name != "help" && name != "completion" {
+					fmt.Fprintf(os.Stderr, "vibecop: no configuration found\n\n")
+					if _, err := setup.Run(); err != nil {
+						return fmt.Errorf("setup: %w", err)
+					}
+					// Post-setup: offer hooks, test, next-steps.
+					postSetup(path)
 				}
 			}
 		}

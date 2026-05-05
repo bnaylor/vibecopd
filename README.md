@@ -61,24 +61,31 @@ Speed matters — `vibecop` is in your agent's critical path. Measured on M4 Pro
 
 ## Quickstart
 
-**First run —** `vibecop setup` walks you through everything:
+**First run —** just run any command. There's nothing to install first:
 
 ```sh
-vibecop setup       # interactive wizard: provider, model, timeout, API key
-vibecop test        # verify the LLM endpoint works
-vibecop start       # boot the daemon (runs in foreground; Ctrl+C to stop)
-vibecop tui         # (in another terminal) watch verdicts in real-time
+vibecop status       # no config? vibecop runs setup automatically
 ```
 
-When you're ready to hook it up to a coding agent:
+The setup wizard walks you through provider, model, timeout, and API key.
+After that it offers to install hooks and test the connection. All in one
+session, zero docs required.
+
+If you prefer to do it step by step:
+
+```sh
+vibecop setup              # interactive wizard
+vibecop test               # verify the LLM endpoint works
+vibecop start              # boot the daemon (foreground; Ctrl+C to stop)
+vibecop tui                # (another terminal) watch verdicts in real-time
+```
+
+Then for full integration with coding agents:
 
 ```sh
 vibecop install --all      # wire hooks into Claude Code and Gemini CLI
 vibecop init --harness claude   # generate Guardian prompt for this project
 ```
-
-`vibecop` will also nudge you toward `vibecop setup` if you run a command
-without a configuration file.
 
 ## Config
 

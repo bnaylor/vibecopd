@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/bnaylor/vibecop/internal/config"
+	"github.com/bnaylor/vibecop/internal/hooks"
 	"github.com/bnaylor/vibecop/internal/setup"
 	"github.com/spf13/cobra"
 )
@@ -32,22 +33,41 @@ test the connection.`,
 			return fmt.Errorf("setup failed: %w", err)
 		}
 
-		fmt.Fprintf(os.Stderr, "\nWhat's next?\n")
-		fmt.Fprintf(os.Stderr, "  1. Run 'vibecop test' to verify the endpoint works\n")
-		fmt.Fprintf(os.Stderr, "  2. Run 'vibecop start' to start the daemon\n")
-		fmt.Fprintf(os.Stderr, "  3. Run 'vibecop install --all' to wire hooks into your coding agents\n")
-		fmt.Fprintf(os.Stderr, "  4. Run 'vibecop tui' to watch decisions in real-time\n")
-
-		// Offer to run test.
-		if confirm("Run 'vibecop test' now?") {
-			vibecopCfg, err = config.Load(result.ConfigPath)
-			if err == nil {
-				testCmd.RunE(cmd, args)
-			}
-		}
-
+		postSetup(result.ConfigPath)
 		return nil
 	},
+}
+
+// postSetup offers hook installation, test, and next-steps after config is created.
+func postSetup(configPath string) {
+	var err error
+	vibecopCfg, err = config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reload config: %v\n", err)
+		return
+	}
+
+	fmt.Fprintln(os.Stderr)
+
+	// Offer to install hooks.
+	if confirm("Install hooks into Claude Code and Gemini CLI?") {
+		for _, h := range []string{hooks.HarnessClaude, hooks.HarnessGemini} {
+			if err := hooks.InstallHooks(h); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: %v\n", h, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "  installed hook for %s\n", h)
+			}
+		}
+	}
+
+	// Offer to test connection.
+	if confirm("Test the connection now?") {
+		// Run test logic directly (avoid cyclic ref to setupCmd).
+		testCmd.RunE(nil, nil)
+	}
+
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "Next: 'vibecop start' to boot the daemon, or 'vibecop tui' to watch it run.\n")
 }
 
 func init() {
