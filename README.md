@@ -1,10 +1,10 @@
-# vibecopd
+# vibecop
 
 **A second AI watches your coding agent so you don't have to.**
 
 You've turned on permission checks in Claude Code or Gemini CLI. You've been approving `bash`, `read_file`, and `write_file` for the last two hours without reading them. You are the rubber stamp. You are the weak link.
 
-`vibecopd` fixes this. It's a small Go daemon that sits between your coding agent and its permission prompts. When the agent wants to run something, `vibecopd` asks a separate, independent AI — one that has never seen your conversation and can't be manipulated by whatever's in your context window — whether it looks okay. Routine stuff passes silently. Weird stuff gets escalated to you with context. You only see the interesting ones.
+`vibecop` fixes this. It's a small Go daemon that sits between your coding agent and its permission prompts. When the agent wants to run something, `vibecop` asks a separate, independent AI — one that has never seen your conversation and can't be manipulated by whatever's in your context window — whether it looks okay. Routine stuff passes silently. Weird stuff gets escalated to you with context. You only see the interesting ones.
 
 No Electron. No GUI. Runs in the background. Optional TUI if you want to watch the decisions fly by.
 
@@ -13,14 +13,14 @@ No Electron. No GUI. Runs in the background. Optional TUI if you want to watch t
 ## How it works
 
 ```
-coding agent  →  PreToolUse hook  →  vibecopd daemon  →  LLM
+coding agent  →  PreToolUse hook  →  vibecop daemon  →  LLM
                                            ↓
                                     approve: silent ✓
                                     escalate: your terminal gets a prompt with context
                                     deny: same, but louder
 ```
 
-The hook is a one-liner installed into your harness config. The daemon runs in the background. The LLM can be a local Ollama model (near-zero cost, ~300ms latency) or a cloud endpoint. If the daemon crashes or times out, the hook fails open — your agent is never blocked by `vibecopd`'s own problems.
+The hook is a one-liner installed into your harness config. The daemon runs in the background. The LLM can be a local Ollama model (near-zero cost, ~300ms latency) or a cloud endpoint. If the daemon crashes or times out, the hook fails open — your agent is never blocked by `vibecop`'s own problems.
 
 ---
 
@@ -28,7 +28,7 @@ The hook is a one-liner installed into your harness config. The daemon runs in t
 
 **Baseline** (default) — No setup required. Catches obviously bad patterns: recursive deletes outside the project, writing to `~/.ssh`, shell startup file modifications, suspicious outbound network calls. Everything else passes.
 
-**Guardian** — Run `vibecopd init` once per project. A coding agent analyzes your codebase and generates a project-specific system prompt. Now `vibecopd` knows that `swift build` is routine here but `curl http://...` probably isn't. Lower escalation rates, more trustworthy verdicts.
+**Guardian** — Run `vibecop init` once per project. A coding agent analyzes your codebase and generates a project-specific system prompt. Now `vibecop` knows that `swift build` is routine here but `curl http://...` probably isn't. Lower escalation rates, more trustworthy verdicts.
 
 ---
 
@@ -42,7 +42,7 @@ The hook is a one-liner installed into your harness config. The daemon runs in t
 
 ## Recommended models
 
-Speed matters — `vibecopd` is in your agent's critical path.
+Speed matters — `vibecop` is in your agent's critical path.
 
 **Local (Ollama):**
 
@@ -62,26 +62,26 @@ Speed matters — `vibecopd` is in your agent's critical path.
 
 ```sh
 # Install
-go install github.com/bnaylor/vibecopd@latest
+go install github.com/bnaylor/vibecop@latest
 
-# Configure (~/.vibecopd/config.toml)
-vibecopd init --harness claude   # generate Guardian prompt for current project
+# Configure (~/.vibecop/config.toml)
+vibecop init --harness claude   # generate Guardian prompt for current project
 
 # Install hooks into your coding harness
-vibecopd install --harness claude
+vibecop install --harness claude
 
 # Start the daemon
-vibecopd start
+vibecop start
 
 # Watch what's happening (optional)
-vibecopd tui
+vibecop tui
 ```
 
 ---
 
 ## Config
 
-`~/.vibecopd/config.toml`:
+`~/.vibecop/config.toml`:
 
 ```toml
 [daemon]
@@ -97,14 +97,14 @@ model      = "qwen3:14b"
 api_key    = ""
 ```
 
-Test your connection: `vibecopd test`
+Test your connection: `vibecop test`
 
 ---
 
 ## TUI
 
 ```
-vibecopd tui
+vibecop tui
 ```
 
 Attaches to a running daemon and shows:
@@ -117,22 +117,22 @@ Attaches to a running daemon and shows:
 ## Commands
 
 ```
-vibecopd start              Start the background daemon
-vibecopd stop               Stop it
-vibecopd status             Show daemon status and config
-vibecopd tui                Attach the live TUI
-vibecopd init               Generate Guardian prompt for current project
-vibecopd install            Install hooks into harness config
-vibecopd uninstall          Remove hooks
-vibecopd test               Test connection to the configured LLM endpoint
-vibecopd refine             Regenerate the Guardian prompt (uses recent activity as context)
+vibecop start              Start the background daemon
+vibecop stop               Stop it
+vibecop status             Show daemon status and config
+vibecop tui                Attach the live TUI
+vibecop init               Generate Guardian prompt for current project
+vibecop install            Install hooks into harness config
+vibecop uninstall          Remove hooks
+vibecop test               Test connection to the configured LLM endpoint
+vibecop refine             Regenerate the Guardian prompt (uses recent activity as context)
 ```
 
 ---
 
 ## Background
 
-This project grew out of experimentation with the AI second-opinion concept — the idea that a second, context-free model evaluating tool-use requests is more trustworthy than a human who's been clicking Approve for two hours. `vibecopd` is the standalone, no-GUI version: a single static binary that runs anywhere Go runs, with no Electron and no dependencies on any particular coding harness's UI.
+This project grew out of experimentation with the AI second-opinion concept — the idea that a second, context-free model evaluating tool-use requests is more trustworthy than a human who's been clicking Approve for two hours. `vibecop` is the standalone, no-GUI version: a single static binary that runs anywhere Go runs, with no Electron and no dependencies on any particular coding harness's UI.
 
 ---
 
