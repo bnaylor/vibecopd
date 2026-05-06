@@ -70,7 +70,7 @@ var startCmd = &cobra.Command{
 		// WaitGroup we drain after d.Run so logs flush before SDK shutdown.
 		var subWG *sync.WaitGroup
 		if tp != nil {
-			subWG = tp.SubscribeEvents(tpCtx, daemonOTLPSubscribe(d))
+			subWG = tp.SubscribeEvents(tpCtx, d.RegisterOTLPSubscriber())
 		}
 
 		if err := d.Start(); err != nil {
@@ -97,13 +97,6 @@ var startCmd = &cobra.Command{
 		}
 		return runErr
 	},
-}
-
-// daemonOTLPSubscribe wraps RegisterOTLPSubscriber so the start command can
-// pass a non-nil channel to telemetry without exposing the daemon's internals
-// to the telemetry package.
-func daemonOTLPSubscribe(d *daemon.Daemon) <-chan daemon.Event {
-	return d.RegisterOTLPSubscriber()
 }
 
 func makePermissionHandler(
@@ -269,6 +262,11 @@ func makePermissionHandler(
 		if reasonStr != "" {
 			rootSpan.SetAttributes(attribute.String("vibecop.reason", reasonStr))
 		}
+		// "escalate" deliberately does not set codes.Error: the evaluator
+		// completed successfully and delegated to a human. codes.Error
+		// reflects "operation failed" — operators who want to track escalates
+		// in dashboards can filter on the vibecop.verdict span attribute or
+		// the verdicts_total{verdict="escalate"} counter.
 		if verdictStr == "deny" || verdictStr == "error" {
 			rootSpan.SetStatus(codes.Error, reasonStr)
 		}

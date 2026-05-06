@@ -1,5 +1,8 @@
 module github.com/bnaylor/vibecop
 
+// Go 1.25.0 required transitively: go.opentelemetry.io/otel v1.43.0 (and the
+// associated contrib/exporter modules) declare `go 1.25.0` in their own
+// go.mod. The most recent OTel line that supports go 1.22 is v1.34.0.
 go 1.25.0
 
 require (

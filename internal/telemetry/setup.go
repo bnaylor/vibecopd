@@ -79,6 +79,11 @@ func Setup(ctx context.Context, cfg config.TelemetryConfig) (*Provider, error) {
 		tpOpts = append(tpOpts, sdktrace.WithSpanProcessor(p))
 	}
 	tp := sdktrace.NewTracerProvider(tpOpts...)
+	// Globals must be set: otelhttp's transport hook reads
+	// otel.GetTracerProvider() / GetMeterProvider() implicitly. Without these
+	// SetX calls, evaluator HTTP spans (and any other otelhttp-instrumented
+	// transport) silently fall back to the no-op provider. This makes Setup
+	// non-reentrant — tests that call it must restore globals on cleanup.
 	otel.SetTracerProvider(tp)
 
 	mpOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}

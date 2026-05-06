@@ -424,7 +424,11 @@ SDK is never initialised — there is zero overhead in the critical path.
 - **Spans** — three-tier hierarchy emitted for each permission check:
   1. `permission.check` — root span (server kind), tagged with `vibecop.tool`,
      `vibecop.project_hash`, `vibecop.verdict`, `vibecop.reason`,
-     `vibecop.latency_ms`.
+     `vibecop.latency_ms`. Note: `vibecop.latency_ms` measures only the
+     evaluator window (the `ec.Evaluate` call), not the total span duration —
+     so its value will differ from end-minus-start of the span by a small
+     amount of bookkeeping overhead. The span's intrinsic duration is the
+     authoritative end-to-end timing.
   2. `evaluator.llm_call` — child span (client kind), tagged with
      `vibecop.model`, `vibecop.api_format`. Status is `Error` on evaluator
      failure with the error attached.

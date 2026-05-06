@@ -48,6 +48,29 @@ func TestNilProviderIsNoOp(t *testing.T) {
 	}
 }
 
+// TestPartialTargetFailure exercises the multi-target sibling-isolation
+// guarantee: a target with an unsupported protocol is skipped entirely while
+// a sibling target's pipelines are still constructed. This is the only
+// deterministically-failing branch in buildPerTargetPipelines — exporter
+// constructors defer their network connection, so they don't fail on bogus
+// endpoints in unit tests.
+func TestPartialTargetFailure(t *testing.T) {
+	targets := []config.TelemetryTarget{
+		{Endpoint: "bad.example:9999", Protocol: "carrier-pigeon", Insecure: true},
+		{Endpoint: "localhost:4318", Protocol: "http", Insecure: true},
+	}
+	spans, readers, logs := buildPerTargetPipelines(context.Background(), targets)
+	if got := len(spans); got != 1 {
+		t.Errorf("span processors: got %d, want 1 (bad target should be dropped, sibling kept)", got)
+	}
+	if got := len(readers); got != 1 {
+		t.Errorf("metric readers: got %d, want 1", got)
+	}
+	if got := len(logs); got != 1 {
+		t.Errorf("log processors: got %d, want 1", got)
+	}
+}
+
 func TestServiceNameFallback(t *testing.T) {
 	if got := serviceName(config.TelemetryConfig{}); got != config.DefaultServiceName {
 		t.Errorf("empty service_name fallback: got %q, want %q", got, config.DefaultServiceName)

@@ -87,7 +87,9 @@ func (d *Daemon) OnPermission(h permissionHandler) { d.onPerm = h }
 // RegisterOTLPSubscriber returns a buffered channel that receives every
 // daemon event for OTLP export. Peers with TUI subscribers in
 // broadcastEvents — same drop-on-full backpressure. The channel is closed
-// during daemon shutdown. Call at most once before Start.
+// during daemon shutdown. Idempotent: subsequent calls return the same
+// channel. Must be called before Start (the broadcaster captures d.otlpCh
+// once).
 func (d *Daemon) RegisterOTLPSubscriber() <-chan Event {
 	if d.otlpCh == nil {
 		d.otlpCh = make(chan Event, 64)
