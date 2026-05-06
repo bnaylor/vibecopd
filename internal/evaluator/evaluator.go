@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Verdict from the LLM evaluation.
@@ -68,7 +70,10 @@ func New(endpoint, apiKey, apiFormat, model string, timeout time.Duration) *Clie
 		apiFormat:  apiFormat,
 		model:      model,
 		timeout:    timeout,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: &http.Client{
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
 		ollamaCoT:  apiFormat == apiFormatOpenAI && isOllamaEndpoint(endpoint),
 	}
 }

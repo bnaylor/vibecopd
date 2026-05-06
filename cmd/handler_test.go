@@ -41,7 +41,7 @@ func makeTestHandler(ev evalClient) func(daemon.Request) daemon.Verdict {
 	loggers := make(map[string]*audit.Logger)
 	var storesMu sync.Mutex
 	d := &daemon.Daemon{}
-	return makePermissionHandler(ev, d, 10, false, stores, loggers, &storesMu)
+	return makePermissionHandler(ev, d, nil, 10, false, "test-model", "anthropic", stores, loggers, &storesMu)
 }
 
 func TestHandlerPassThroughAfterThreeFailures(t *testing.T) {

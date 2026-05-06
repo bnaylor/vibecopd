@@ -392,6 +392,76 @@ VibeCop **never blocks an agent** due to its own malfunction.
 
 If the daemon itself is unreachable (socket missing or refused), the hook exits 0 immediately — fail-open, zero latency overhead.
 
+## Telemetry (OTLP)
+
+VibeCop optionally exports OpenTelemetry traces, metrics, and logs to 0-n
+configured collectors. Telemetry is **fail-open**: a misconfigured target,
+unreachable collector, or slow exporter must never block a permission check.
+
+### Config
+
+```toml
+[telemetry]
+enabled      = true
+service_name = "vibecopd"
+
+[[telemetry.targets]]
+endpoint = "localhost:4317"
+protocol = "grpc"          # "grpc" or "http"
+insecure = true            # plaintext (no TLS) — localhost only
+
+[[telemetry.targets]]
+endpoint = "https://collector.example.com:4318"
+protocol = "http"
+insecure = false
+```
+
+When `enabled = false` or `targets = []`, telemetry is fully disabled and the
+SDK is never initialised — there is zero overhead in the critical path.
+
+### Signals
+
+- **Spans** — three-tier hierarchy emitted for each permission check:
+  1. `permission.check` — root span (server kind), tagged with `vibecop.tool`,
+     `vibecop.project_hash`, `vibecop.verdict`, `vibecop.reason`,
+     `vibecop.latency_ms`.
+  2. `evaluator.llm_call` — child span (client kind), tagged with
+     `vibecop.model`, `vibecop.api_format`. Status is `Error` on evaluator
+     failure with the error attached.
+  3. HTTP-level child added automatically by `otelhttp` on the evaluator's
+     `http.Client` transport.
+
+- **Metrics** —
+  - `vibecop.verdicts_total` (Int64Counter, unit `{verdict}`) — labelled with
+    `vibecop.verdict` and `vibecop.tool`.
+  - `vibecop.evaluator_latency_ms` (Int64Histogram, unit `ms`) — labelled with
+    `vibecop.verdict`.
+
+- **Logs** — every `daemon.Event` is mirrored to OTLP logs by an internal
+  subscriber that peers with TUI subscribers in the daemon's broadcast
+  fan-out. Severity is derived from the verdict (`deny`→ERROR,
+  `escalate|error`→WARN, `approve`→INFO) and explicit `Level` overrides
+  (e.g. the suspended pass-through warning).
+
+### Multi-target export
+
+Each configured target gets its own `BatchSpanProcessor` /
+`PeriodicReader` / `BatchLogProcessor`. A target whose exporter init fails
+is logged once and skipped — sibling targets are unaffected. If every
+configured target fails, the SDK is not initialised and the daemon
+continues without telemetry.
+
+### Lifecycle
+
+The provider is initialised in `cmd start` after config load and before
+the daemon's UDS server starts accepting. Shutdown sequence:
+
+1. Daemon shutdown closes its event channel.
+2. `broadcastEvents` drains and closes the OTLP subscriber channel.
+3. The log subscriber goroutine exits.
+4. `Provider.Shutdown` flushes pending traces, metrics, and logs (3 s
+   per provider) and tears down the SDK.
+
 ## Connection Testing
 
 `vibecop test` sends a minimal probe request to the configured endpoint (a synthetic `approve`-expected tool call) and reports:

@@ -25,17 +25,38 @@ type ModelConfig struct {
 	APIKey    string `toml:"api_key"`
 }
 
+// TelemetryTarget is a single OTLP collector destination.
+//
+// Protocol must be "grpc" or "http". When Insecure is true the exporter uses
+// plaintext (no TLS) — appropriate for localhost collectors only.
+type TelemetryTarget struct {
+	Endpoint string `toml:"endpoint"`
+	Protocol string `toml:"protocol"`
+	Insecure bool   `toml:"insecure"`
+}
+
+// TelemetryConfig controls OTLP export. Telemetry is fail-open: zero targets
+// (or any init failure) means no export, never a blocked permission check.
+type TelemetryConfig struct {
+	Enabled     bool              `toml:"enabled"`
+	ServiceName string            `toml:"service_name"`
+	Targets     []TelemetryTarget `toml:"targets"`
+}
+
 // Config is the top-level vibecop configuration.
 type Config struct {
-	Daemon DaemonConfig `toml:"daemon"`
-	Model  ModelConfig  `toml:"model"`
+	Daemon    DaemonConfig    `toml:"daemon"`
+	Model     ModelConfig     `toml:"model"`
+	Telemetry TelemetryConfig `toml:"telemetry"`
 }
 
 const (
-	DefaultTimeoutMs      = 5000
-	DefaultActivityWindow = 10
-	DefaultAPIFormat      = "anthropic"
-	DefaultModel          = "claude-haiku-4-5"
+	DefaultTimeoutMs       = 5000
+	DefaultActivityWindow  = 10
+	DefaultAPIFormat       = "anthropic"
+	DefaultModel           = "claude-haiku-4-5"
+	DefaultServiceName     = "vibecopd"
+	DefaultTelemetryProto  = "grpc"
 
 	vibecopDir  = ".vibecop"
 	projectsDir = "projects"
@@ -55,6 +76,11 @@ func DefaultConfig() Config {
 			APIFormat: DefaultAPIFormat,
 			Model:     DefaultModel,
 			APIKey:    "",
+		},
+		Telemetry: TelemetryConfig{
+			Enabled:     false,
+			ServiceName: DefaultServiceName,
+			Targets:     nil,
 		},
 	}
 }

@@ -61,6 +61,7 @@ type Daemon struct {
 	evtCh       chan Event
 	subs        map[chan Event]struct{}
 	subsMu      sync.Mutex
+	otlpCh      chan Event
 	onPerm      permissionHandler
 	wg          sync.WaitGroup
 	quit        chan struct{}
@@ -82,6 +83,17 @@ func New(socketPath string, cfg config.Config) *Daemon {
 
 // OnPermission registers the handler for permission_request messages.
 func (d *Daemon) OnPermission(h permissionHandler) { d.onPerm = h }
+
+// RegisterOTLPSubscriber returns a buffered channel that receives every
+// daemon event for OTLP export. Peers with TUI subscribers in
+// broadcastEvents — same drop-on-full backpressure. The channel is closed
+// during daemon shutdown. Call at most once before Start.
+func (d *Daemon) RegisterOTLPSubscriber() <-chan Event {
+	if d.otlpCh == nil {
+		d.otlpCh = make(chan Event, 64)
+	}
+	return d.otlpCh
+}
 
 // Start binds the socket and begins accepting connections.
 func (d *Daemon) Start() error {
@@ -297,6 +309,18 @@ func (d *Daemon) broadcastEvents() {
 			}
 		}
 		d.subsMu.Unlock()
+
+		if d.otlpCh != nil {
+			select {
+			case d.otlpCh <- evt:
+			default:
+				// Drop for slow OTLP exporter — fail-open.
+			}
+		}
+	}
+	if d.otlpCh != nil {
+		close(d.otlpCh)
+		d.otlpCh = nil
 	}
 }
 

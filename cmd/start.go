@@ -12,7 +12,10 @@ import (
 	"github.com/bnaylor/vibecop/internal/config"
 	"github.com/bnaylor/vibecop/internal/daemon"
 	"github.com/bnaylor/vibecop/internal/evaluator"
+	"github.com/bnaylor/vibecop/internal/telemetry"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // evalClient is the interface the permission handler needs from the evaluator.
@@ -36,6 +39,15 @@ var startCmd = &cobra.Command{
 		}
 		socketPath := daemon.DefaultSocketPath(vibecopDir)
 
+		// Init OTLP telemetry (fail-open: tp is nil when disabled or when
+		// every target fails to initialise). All telemetry helpers are
+		// nil-safe so the rest of the daemon is unaware of the difference.
+		tpCtx := context.Background()
+		tp, err := telemetry.Setup(tpCtx, cfg.Telemetry)
+		if err != nil {
+			log.Printf("telemetry: %v (continuing without export)", err)
+		}
+
 		d := daemon.New(socketPath, cfg)
 
 		// Create the LLM evaluator client.
@@ -52,22 +64,56 @@ var startCmd = &cobra.Command{
 		loggers := make(map[string]*audit.Logger)
 		var storesMu sync.Mutex
 
-		d.OnPermission(makePermissionHandler(ec, d, cfg.Daemon.ActivityWindow, cfg.Daemon.AuditEnabled, stores, loggers, &storesMu))
+		d.OnPermission(makePermissionHandler(ec, d, tp, cfg.Daemon.ActivityWindow, cfg.Daemon.AuditEnabled, cfg.Model.Model, cfg.Model.APIFormat, stores, loggers, &storesMu))
+
+		// Subscribe telemetry log exporter to daemon events. Returns a
+		// WaitGroup we drain after d.Run so logs flush before SDK shutdown.
+		var subWG *sync.WaitGroup
+		if tp != nil {
+			subWG = tp.SubscribeEvents(tpCtx, daemonOTLPSubscribe(d))
+		}
 
 		if err := d.Start(); err != nil {
+			if tp != nil {
+				_ = tp.Shutdown(tpCtx)
+			}
 			return fmt.Errorf("daemon start: %w", err)
 		}
 
 		fmt.Fprintf(os.Stderr, "vibecop: daemon started (pid %d)\n", os.Getpid())
-		return d.Run()
+		runErr := d.Run()
+
+		// Daemon has fully shut down (evtCh closed, otlpCh closed). Drain
+		// the log subscriber, then flush telemetry SDK.
+		if subWG != nil {
+			subWG.Wait()
+		}
+		if tp != nil {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := tp.Shutdown(shutCtx); err != nil {
+				log.Printf("telemetry: shutdown: %v", err)
+			}
+			cancel()
+		}
+		return runErr
 	},
+}
+
+// daemonOTLPSubscribe wraps RegisterOTLPSubscriber so the start command can
+// pass a non-nil channel to telemetry without exposing the daemon's internals
+// to the telemetry package.
+func daemonOTLPSubscribe(d *daemon.Daemon) <-chan daemon.Event {
+	return d.RegisterOTLPSubscriber()
 }
 
 func makePermissionHandler(
 	ec evalClient,
 	d *daemon.Daemon,
+	tp *telemetry.Provider,
 	activityWindow int,
 	auditEnabled bool,
+	modelName string,
+	apiFormat string,
 	stores map[string]*audit.ActivityStore,
 	loggers map[string]*audit.Logger,
 	storesMu *sync.Mutex,
@@ -85,6 +131,7 @@ func makePermissionHandler(
 		failMu.Unlock()
 
 		if isSuspended {
+			tp.RecordVerdict(context.Background(), "approve", req.Tool)
 			d.EmitEvent(daemon.Event{
 				Tool:      req.Tool,
 				Input:     req.Input,
@@ -98,6 +145,9 @@ func makePermissionHandler(
 		}
 
 		projectHash := config.ProjectHash(req.ProjectPath)
+
+		spanCtx, rootSpan := tp.StartPermissionSpan(context.Background(), req.Tool, projectHash)
+		defer rootSpan.End()
 
 		// Get or create per-project activity store and audit logger.
 		storesMu.Lock()
@@ -117,6 +167,9 @@ func makePermissionHandler(
 		systemPrompt, err := evaluator.ResolvePrompt(projectHash)
 		if err != nil {
 			log.Printf("evaluator: prompt resolution error: %v", err)
+			rootSpan.SetStatus(codes.Error, "prompt resolution failed")
+			rootSpan.RecordError(err)
+			tp.RecordVerdict(spanCtx, "escalate", req.Tool)
 			return daemon.Verdict{
 				Verdict: "escalate",
 				Reason:  "VibeCop: failed to load configuration",
@@ -131,12 +184,18 @@ func makePermissionHandler(
 			RecentActivity: activityEntriesToVerdicts(recent),
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), ec.Timeout())
+		ctx, cancel := context.WithTimeout(spanCtx, ec.Timeout())
 		defer cancel()
 
+		evalCtx, evalSpan := tp.StartEvaluatorSpan(ctx, modelName, apiFormat)
 		startTime := time.Now()
-		v, evalErr := ec.Evaluate(ctx, toolReq, systemPrompt)
+		v, evalErr := ec.Evaluate(evalCtx, toolReq, systemPrompt)
 		latencyMs := time.Since(startTime).Milliseconds()
+		if evalErr != nil {
+			evalSpan.SetStatus(codes.Error, evalErr.Error())
+			evalSpan.RecordError(evalErr)
+		}
+		evalSpan.End()
 
 		verdictStr := v.Verdict
 		reasonStr := v.Reason
@@ -201,6 +260,20 @@ func makePermissionHandler(
 			LatencyMs: latencyMs,
 			Timestamp: now.Format(time.RFC3339),
 		})
+
+		// Telemetry — annotate root span and record metrics.
+		rootSpan.SetAttributes(
+			attribute.String("vibecop.verdict", verdictStr),
+			attribute.Int64("vibecop.latency_ms", latencyMs),
+		)
+		if reasonStr != "" {
+			rootSpan.SetAttributes(attribute.String("vibecop.reason", reasonStr))
+		}
+		if verdictStr == "deny" || verdictStr == "error" {
+			rootSpan.SetStatus(codes.Error, reasonStr)
+		}
+		tp.RecordVerdict(spanCtx, verdictStr, req.Tool)
+		tp.RecordEvaluatorLatency(spanCtx, latencyMs, verdictStr)
 
 		return daemon.Verdict{
 			Verdict: verdictStr,

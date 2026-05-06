@@ -65,6 +65,62 @@ api_key = "secret"
 	}
 }
 
+func TestTelemetryDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Telemetry.Enabled {
+		t.Error("telemetry should be disabled by default")
+	}
+	if cfg.Telemetry.ServiceName != DefaultServiceName {
+		t.Errorf("service_name: got %q, want %q", cfg.Telemetry.ServiceName, DefaultServiceName)
+	}
+	if len(cfg.Telemetry.Targets) != 0 {
+		t.Errorf("targets: got %d, want 0", len(cfg.Telemetry.Targets))
+	}
+}
+
+func TestLoadTelemetryMultipleTargets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte(`
+[telemetry]
+enabled = true
+service_name = "vibecop-test"
+
+[[telemetry.targets]]
+endpoint = "localhost:4317"
+protocol = "grpc"
+insecure = true
+
+[[telemetry.targets]]
+endpoint = "https://collector.example.com:4318"
+protocol = "http"
+insecure = false
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Enabled {
+		t.Error("expected telemetry enabled")
+	}
+	if cfg.Telemetry.ServiceName != "vibecop-test" {
+		t.Errorf("service_name: got %q", cfg.Telemetry.ServiceName)
+	}
+	if len(cfg.Telemetry.Targets) != 2 {
+		t.Fatalf("targets: got %d, want 2", len(cfg.Telemetry.Targets))
+	}
+	if cfg.Telemetry.Targets[0].Endpoint != "localhost:4317" {
+		t.Errorf("targets[0] endpoint: got %q", cfg.Telemetry.Targets[0].Endpoint)
+	}
+	if cfg.Telemetry.Targets[0].Protocol != "grpc" || !cfg.Telemetry.Targets[0].Insecure {
+		t.Errorf("targets[0]: protocol/insecure mismatch: %+v", cfg.Telemetry.Targets[0])
+	}
+	if cfg.Telemetry.Targets[1].Protocol != "http" || cfg.Telemetry.Targets[1].Insecure {
+		t.Errorf("targets[1]: protocol/insecure mismatch: %+v", cfg.Telemetry.Targets[1])
+	}
+}
+
 func TestProjectHash(t *testing.T) {
 	h1 := ProjectHash("/some/path")
 	h2 := ProjectHash("/some/path")
