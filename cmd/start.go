@@ -181,6 +181,7 @@ func makePermissionHandler(
 		defer cancel()
 
 		evalCtx, evalSpan := tp.StartEvaluatorSpan(ctx, modelName, apiFormat)
+		defer evalSpan.End()
 		startTime := time.Now()
 		v, evalErr := ec.Evaluate(evalCtx, toolReq, systemPrompt)
 		latencyMs := time.Since(startTime).Milliseconds()
@@ -188,7 +189,6 @@ func makePermissionHandler(
 			evalSpan.SetStatus(codes.Error, evalErr.Error())
 			evalSpan.RecordError(evalErr)
 		}
-		evalSpan.End()
 
 		verdictStr := v.Verdict
 		reasonStr := v.Reason
