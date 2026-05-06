@@ -87,6 +87,8 @@ func severityFor(evt daemon.Event) otellog.Severity {
 		return otellog.SeverityError
 	case "warn":
 		return otellog.SeverityWarn
+	case "info":
+		return otellog.SeverityInfo
 	}
 	switch evt.Verdict {
 	case "deny":

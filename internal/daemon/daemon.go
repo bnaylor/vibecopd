@@ -46,7 +46,7 @@ type Event struct {
 	Reason    string `json:"reason,omitempty"`
 	LatencyMs int64  `json:"latency_ms,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`
-	Level     string `json:"level,omitempty"` // "info", "error"
+	Level     string `json:"level,omitempty"` // "info", "warn", "error"
 	Message   string `json:"message,omitempty"`
 }
 

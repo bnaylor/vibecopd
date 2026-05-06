@@ -52,6 +52,7 @@ func TestEventToLogRecordSeverity(t *testing.T) {
 		{"approve verdict", daemon.Event{Verdict: "approve"}, otellog.SeverityInfo},
 		{"explicit error level", daemon.Event{Level: "error", Message: "oops"}, otellog.SeverityError},
 		{"explicit warn level", daemon.Event{Level: "warn", Message: "suspended"}, otellog.SeverityWarn},
+		{"explicit info level overrides deny", daemon.Event{Level: "info", Verdict: "deny"}, otellog.SeverityInfo},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
