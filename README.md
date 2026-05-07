@@ -87,6 +87,20 @@ vibecop install --all      # wire hooks into Claude Code and Gemini CLI
 vibecop init --harness claude   # generate Guardian prompt for this project
 ```
 
+By default the installed hook calls `vibecop hook` and resolves the binary
+through `$PATH`. Pass `--vibecop-path` to either `vibecop setup` or
+`vibecop install` to point the hook at a specific binary instead — handy when
+testing a local build without overwriting the system install:
+
+```sh
+go build -o ./vibecop ./cmd/vibecop
+vibecop install --all --vibecop-path ./vibecop
+```
+
+The path is resolved to absolute, so the hook works regardless of the agent's
+working directory. Re-running with a different `--vibecop-path` updates the
+existing entry in place rather than appending a duplicate.
+
 ## Config
 
 `~/.vibecop/config.toml` — created by `vibecop setup`, or write it yourself:

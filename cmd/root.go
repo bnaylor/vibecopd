@@ -44,7 +44,11 @@ Runs in the background; attach the TUI to monitor activity.`,
 						return fmt.Errorf("setup: %w", err)
 					}
 					// Post-setup: offer hooks, test, next-steps.
-					postSetup(path)
+					// Auto-trigger has no flag plumbing — fall back to the
+					// default `vibecop hook` (PATH-based) command. Users who
+					// need a custom binary path can re-run `vibecop install
+					// --vibecop-path …` afterwards.
+					postSetup(path, "")
 				}
 			}
 		}

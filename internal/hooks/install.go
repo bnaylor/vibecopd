@@ -6,7 +6,32 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
+
+// hookCommand returns the shell command string to install. An empty
+// vibecopPath uses the bare "vibecop" binary (resolved from $PATH);
+// a non-empty path is used verbatim — callers should resolve it to
+// absolute via filepath.Abs first if they want CWD-independent hooks.
+func hookCommand(vibecopPath string) string {
+	if vibecopPath == "" {
+		return "vibecop hook"
+	}
+	return vibecopPath + " hook"
+}
+
+// isVibecopHookCommand reports whether cmd looks like a vibecop hook
+// invocation — either the default "vibecop hook" or "<path>/vibecop hook".
+// Used to detect previously-installed entries so install can replace them
+// (rather than appending a duplicate) and uninstall can remove either form.
+func isVibecopHookCommand(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) != 2 || fields[1] != "hook" {
+		return false
+	}
+	bin := fields[0]
+	return bin == "vibecop" || strings.HasSuffix(bin, "/vibecop")
+}
 
 // --- Claude Code settings.json types ---
 
@@ -56,18 +81,22 @@ func geminiSettingsPath() (string, error) {
 }
 
 // InstallHooks adds vibecop hooks to the specified harness's settings.
-func InstallHooks(harness string) error {
+// vibecopPath is the path to the vibecop binary the hook should invoke;
+// empty means rely on $PATH (writes "vibecop hook"). A previously installed
+// vibecop entry is replaced if its path differs, keeping installs idempotent
+// across path changes.
+func InstallHooks(harness, vibecopPath string) error {
 	switch harness {
 	case HarnessClaude:
-		return installClaudeHooks()
+		return installClaudeHooks(vibecopPath)
 	case HarnessGemini:
-		return installGeminiHooks()
+		return installGeminiHooks(vibecopPath)
 	default:
 		return fmt.Errorf("unsupported harness: %s", harness)
 	}
 }
 
-func installClaudeHooks() error {
+func installClaudeHooks(vibecopPath string) error {
 	path, err := claudeSettingsPath()
 	if err != nil {
 		return err
@@ -87,22 +116,35 @@ func installClaudeHooks() error {
 		}
 	}
 
-	// Check if already installed.
-	for _, e := range hooks.PreToolUse {
-		if len(e.Hooks) > 0 && e.Hooks[0].Command == "vibecop hook" {
+	want := hookCommand(vibecopPath)
+
+	// Walk existing entries: if there's already a vibecop hook, update its
+	// command in place (idempotent on equal paths, replace on differing
+	// ones) instead of appending a duplicate.
+	for i, e := range hooks.PreToolUse {
+		if len(e.Hooks) == 0 {
+			continue
+		}
+		if !isVibecopHookCommand(e.Hooks[0].Command) {
+			continue
+		}
+		if e.Hooks[0].Command == want {
 			return nil
 		}
+		hooks.PreToolUse[i].Hooks[0].Command = want
+		raw["hooks"] = hooks
+		return writeRawJSON(path, raw)
 	}
 
 	hooks.PreToolUse = append(hooks.PreToolUse, claudePreToolEntry{
 		Matcher: "",
-		Hooks:   []claudeHook{{Type: "command", Command: "vibecop hook"}},
+		Hooks:   []claudeHook{{Type: "command", Command: want}},
 	})
 	raw["hooks"] = hooks
 	return writeRawJSON(path, raw)
 }
 
-func installGeminiHooks() error {
+func installGeminiHooks(vibecopPath string) error {
 	path, err := geminiSettingsPath()
 	if err != nil {
 		return err
@@ -121,11 +163,12 @@ func installGeminiHooks() error {
 		}
 	}
 
-	if hooks.BeforeTool == "vibecop hook" {
+	want := hookCommand(vibecopPath)
+	if hooks.BeforeTool == want {
 		return nil
 	}
 
-	hooks.BeforeTool = "vibecop hook"
+	hooks.BeforeTool = want
 	raw["hooks"] = hooks
 	return writeRawJSON(path, raw)
 }
@@ -162,7 +205,7 @@ func uninstallClaudeHooks() error {
 	}
 
 	filtered := slices.DeleteFunc(hooks.PreToolUse, func(e claudePreToolEntry) bool {
-		return len(e.Hooks) > 0 && e.Hooks[0].Command == "vibecop hook"
+		return len(e.Hooks) > 0 && isVibecopHookCommand(e.Hooks[0].Command)
 	})
 
 	if len(filtered) == len(hooks.PreToolUse) {
@@ -198,7 +241,7 @@ func uninstallGeminiHooks() error {
 		}
 	}
 
-	if hooks.BeforeTool != "vibecop hook" {
+	if !isVibecopHookCommand(hooks.BeforeTool) {
 		return nil
 	}
 
