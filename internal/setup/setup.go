@@ -18,6 +18,47 @@ const (
 	ProviderOllama    = "3"
 )
 
+// OpenAICompatibleEndpoint is one entry in the OpenAI-compatible provider
+// catalog shown by the setup wizard. URL is the verbatim chat-completions URL
+// vibecop POSTs to; Caveat (optional) is printed after the user selects this
+// entry so they're not surprised by documented limitations of the provider's
+// OpenAI-compat shim.
+type OpenAICompatibleEndpoint struct {
+	Name   string
+	URL    string
+	Caveat string
+}
+
+// OpenAICompatibleEndpoints is the seed catalog of known-good OpenAI-compatible
+// chat-completions endpoints. Verified URL paths only — anything that needs
+// per-deployment templating or non-Bearer auth (e.g. Azure OpenAI) belongs in
+// the Custom URL flow, not here. See VCOP-10 issue body for the source table.
+var OpenAICompatibleEndpoints = []OpenAICompatibleEndpoint{
+	{Name: "OpenAI", URL: "https://api.openai.com/v1/chat/completions"},
+	{Name: "Google Gemini (OpenAI-compat)", URL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"},
+	{Name: "Groq", URL: "https://api.groq.com/openai/v1/chat/completions"},
+	{Name: "Together AI", URL: "https://api.together.ai/v1/chat/completions"},
+	{Name: "OpenRouter", URL: "https://openrouter.ai/api/v1/chat/completions"},
+	{Name: "DeepSeek", URL: "https://api.deepseek.com/chat/completions"},
+	{Name: "Mistral La Plateforme", URL: "https://api.mistral.ai/v1/chat/completions"},
+	{Name: "xAI (Grok)", URL: "https://api.x.ai/v1/chat/completions"},
+	{Name: "Cerebras", URL: "https://api.cerebras.ai/v1/chat/completions"},
+	{Name: "Fireworks AI", URL: "https://api.fireworks.ai/inference/v1/chat/completions"},
+	{
+		Name:   "Anthropic (OpenAI-compat shim)",
+		URL:    "https://api.anthropic.com/v1/chat/completions",
+		Caveat: "Anthropic markets this as test/eval only. n must be 1; response_format/seed/logprobs are ignored; system messages get hoisted.",
+	},
+	{
+		Name:   "Perplexity (Sonar)",
+		URL:    "https://api.perplexity.ai/chat/completions",
+		Caveat: "Sonar models always perform a web search — slower than typical chat models, may be overkill for verdict workloads.",
+	},
+	{Name: "Ollama (local)", URL: "http://localhost:11434/v1/chat/completions"},
+	{Name: "LM Studio (local)", URL: "http://localhost:1234/v1/chat/completions"},
+	{Name: "vLLM (local)", URL: "http://localhost:8000/v1/chat/completions"},
+}
+
 // Result is the outcome of a successful setup wizard run.
 type Result struct {
 	ConfigPath string
@@ -65,7 +106,7 @@ func Run() (*Result, error) {
 
 	case ProviderOpenAI:
 		apiFormat = "openai"
-		endpoint = promptRequired(r, "   Endpoint URL", "https://api.openai.com/v1/chat/completions")
+		endpoint = pickOpenAIEndpoint(r)
 		model = promptRequired(r, "   Model name", "gpt-4o-mini")
 		fmt.Print("   API key (leave blank if not needed): ")
 		key, _ := r.ReadString('\n')
@@ -177,6 +218,40 @@ func promptDefault(r *bufio.Reader, label, def string) string {
 		return def
 	}
 	return line
+}
+
+// pickOpenAIEndpoint shows the catalog as a numbered list (Custom URL last)
+// and returns the chosen verbatim chat-completions URL. Empty input picks
+// option 1 (OpenAI). Out-of-range numeric input re-prompts.
+func pickOpenAIEndpoint(r *bufio.Reader) string {
+	customIdx := len(OpenAICompatibleEndpoints) + 1
+	fmt.Println("   Endpoint")
+	for i, e := range OpenAICompatibleEndpoints {
+		fmt.Printf("   [%d] %s — %s\n", i+1, e.Name, e.URL)
+	}
+	fmt.Printf("   [%d] Custom URL\n", customIdx)
+
+	for {
+		fmt.Print("   Choice [1]: ")
+		line, _ := r.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			line = "1"
+		}
+		choice, err := strconv.Atoi(line)
+		if err != nil || choice < 1 || choice > customIdx {
+			fmt.Printf("   (enter a number between 1 and %d)\n", customIdx)
+			continue
+		}
+		if choice == customIdx {
+			return promptRequired(r, "   Custom endpoint URL", "https://api.openai.com/v1/chat/completions")
+		}
+		picked := OpenAICompatibleEndpoints[choice-1]
+		if picked.Caveat != "" {
+			fmt.Printf("   Note: %s\n", picked.Caveat)
+		}
+		return picked.URL
+	}
 }
 
 func promptRequired(r *bufio.Reader, label, hint string) string {

@@ -71,6 +71,14 @@ The setup wizard walks you through provider, model, timeout, and API key.
 After that it offers to install hooks and test the connection. All in one
 session, zero docs required.
 
+When you pick the **OpenAI-compatible** provider, the wizard shows a numbered
+list of known-good chat-completions endpoints (OpenAI, Google Gemini,
+Groq, Together AI, OpenRouter, DeepSeek, Mistral, xAI, Cerebras, Fireworks,
+Anthropic compat shim, Perplexity Sonar, plus local Ollama / LM Studio / vLLM
+defaults). Pick one to fill in the verbatim URL `vibecop` will POST to.
+"Custom URL" is the last option for anything not listed (e.g. self-hosted
+gateways or Azure OpenAI, which needs per-deployment templating).
+
 If you prefer to do it step by step:
 
 ```sh
