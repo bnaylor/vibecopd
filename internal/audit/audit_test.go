@@ -229,6 +229,31 @@ func TestAuditLoggerListPendingSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuditLoggerWritePendingUsesUniqueKeys(t *testing.T) {
+	l := NewLogger("test-unique", true)
+	rec := AuditRecord{
+		Timestamp: "2026-05-07T10:00:00Z",
+		ToolName:  "Bash",
+		Verdict:   "escalate",
+	}
+
+	key1, err := l.WritePending(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key2, err := l.WritePending(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key1 == key2 {
+		t.Fatalf("expected unique keys, got %q twice", key1)
+	}
+
+	if got := l.ListPending(); len(got) != 2 {
+		t.Fatalf("expected 2 pending entries after identical writes, got %d", len(got))
+	}
+}
+
 func TestAuditLoggerFlushPending(t *testing.T) {
 	l := NewLogger("test-flush", true)
 	l.WritePending(AuditRecord{Timestamp: "t1", ToolName: "Bash", Verdict: "escalate"})

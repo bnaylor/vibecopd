@@ -41,6 +41,7 @@ type Logger struct {
 	projectHash string
 	enabled     bool
 	pending     map[string]*AuditRecord
+	pendingSeq  uint64
 	mu          sync.Mutex
 }
 
@@ -82,14 +83,15 @@ func (l *Logger) Write(rec AuditRecord) error {
 }
 
 // WritePending stores a partial audit record (for escalate/timeout).
-// Returns a key that can be used to complete the record later.
+// Returns an opaque key that can be used to complete the record later.
 func (l *Logger) WritePending(rec AuditRecord) (string, error) {
 	if !l.enabled {
 		return "", nil
 	}
 
-	key := fmt.Sprintf("%s|%s", rec.ToolName, rec.Timestamp)
 	l.mu.Lock()
+	l.pendingSeq++
+	key := fmt.Sprintf("%s|%s|%d", rec.ToolName, rec.Timestamp, l.pendingSeq)
 	l.pending[key] = &rec
 	l.mu.Unlock()
 	return key, nil
