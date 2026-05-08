@@ -14,10 +14,10 @@ import (
 
 // fakeEvaluator is a minimal evaluator that returns configurable results.
 type fakeEvaluator struct {
-	mu       sync.Mutex
-	calls    int
+	mu        sync.Mutex
+	calls     int
 	failUntil int // return error for the first N calls
-	verdict  string
+	verdict   string
 }
 
 func (f *fakeEvaluator) Evaluate(_ context.Context, _ evaluator.ToolRequest, _ string) (evaluator.Verdict, error) {
@@ -104,5 +104,43 @@ func TestHandlerResetsFailureCountOnSuccess(t *testing.T) {
 	v = h(req)
 	if v.Verdict != "approve" {
 		t.Errorf("expected approve (not suspended), got %s", v.Verdict)
+	}
+}
+
+func TestListPendingConcurrentWithPermissionHandler(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	fe := &fakeEvaluator{verdict: "escalate"}
+	stores := make(map[string]*audit.ActivityStore)
+	loggers := make(map[string]*audit.Logger)
+	var storesMu sync.Mutex
+
+	d := &daemon.Daemon{}
+	perm := makePermissionHandler(fe, d, nil, 10, true, "test-model", "anthropic", stores, loggers, &storesMu)
+	list := makeListPendingHandler(loggers, &storesMu)
+
+	req := daemon.Request{
+		Type:        daemon.TypePermissionRequest,
+		Tool:        "Bash",
+		Input:       "rm -rf /tmp/test",
+		ProjectPath: t.TempDir(),
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = perm(req)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = list()
+		}()
+	}
+	wg.Wait()
+
+	if got := list(); len(got) == 0 {
+		t.Fatal("expected pending escalations after concurrent permission requests")
 	}
 }
