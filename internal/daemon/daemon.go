@@ -184,9 +184,9 @@ func (d *Daemon) Start() error {
 	go d.broadcastEvents()
 
 	// Accept loop.
-	go func() {
+	go func(listener net.Listener) {
 		for {
-			conn, err := d.listener.Accept()
+			conn, err := listener.Accept()
 			if err != nil {
 				select {
 				case <-d.quit:
@@ -199,7 +199,7 @@ func (d *Daemon) Start() error {
 			d.wg.Add(1)
 			go d.handleConn(conn)
 		}
-	}()
+	}(d.listener)
 
 	return nil
 }
