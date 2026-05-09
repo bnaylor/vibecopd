@@ -190,6 +190,4 @@ This project grew out of experimentation with the AI second-opinion concept — 
 
 ## Status
 
-Implementation complete. See [`docs/spec.md`](docs/spec.md) for the full design specification.
-
 See [`docs/spec.md`](docs/spec.md) for the full design specification.
