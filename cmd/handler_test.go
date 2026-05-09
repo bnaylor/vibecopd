@@ -107,6 +107,68 @@ func TestHandlerResetsFailureCountOnSuccess(t *testing.T) {
 	}
 }
 
+// TestCompletePendingFeedsActivityStore covers VCOP-16.4: a human
+// approve/deny on an escalated request must land in the rolling
+// activity store so subsequent LLM evaluations see the resolved
+// outcome (approve / deny), not just the original "escalate" verdict.
+// Without this, a user who repeatedly green-lights the same escalation
+// would see no learning signal in subsequent recent-activity context.
+func TestCompletePendingFeedsActivityStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	fe := &fakeEvaluator{verdict: "escalate"}
+	stores := make(map[string]*audit.ActivityStore)
+	loggers := make(map[string]*audit.Logger)
+	var storesMu sync.Mutex
+
+	d := &daemon.Daemon{}
+	perm := makePermissionHandler(fe, d, nil, 10, true, "test-model", "anthropic", stores, loggers, &storesMu)
+	list := makeListPendingHandler(loggers, &storesMu, true)
+	complete := makeCompletePendingHandler(loggers, stores, 10, &storesMu)
+
+	req := daemon.Request{
+		Type:        daemon.TypePermissionRequest,
+		Tool:        "Bash",
+		Input:       "echo decision-tree-test",
+		ProjectPath: t.TempDir(),
+	}
+
+	// Trigger an escalate verdict that goes into the pending queue.
+	_ = perm(req)
+
+	pending, _ := list()
+	if len(pending) == 0 {
+		t.Fatal("expected at least one pending escalation after escalate verdict")
+	}
+	target := pending[0]
+
+	if err := complete(target.ProjectHash, target.Key, "approved"); err != nil {
+		t.Fatalf("complete handler returned error: %v", err)
+	}
+
+	// Verify the activity store now holds two entries: the original
+	// `escalate` plus a synthesized `approve` derived from the human
+	// decision. Order matters — the post-escalation entry must be
+	// newest so the LLM's recent-activity slice sees it last.
+	storesMu.Lock()
+	store := stores[target.ProjectHash]
+	storesMu.Unlock()
+	if store == nil {
+		t.Fatal("expected an activity store for the project after completion")
+	}
+	recent := store.Recent()
+	if len(recent) < 2 {
+		t.Fatalf("expected ≥2 activity entries (escalate + approve), got %d: %+v", len(recent), recent)
+	}
+	last := recent[len(recent)-1]
+	if last.Verdict != "approve" {
+		t.Errorf("expected last activity verdict=approve (mapped from human approved), got %q", last.Verdict)
+	}
+	if last.Tool != "Bash" {
+		t.Errorf("expected post-escalation tool=Bash, got %q", last.Tool)
+	}
+}
+
 func TestListPendingConcurrentWithPermissionHandler(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

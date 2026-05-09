@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	cfgFile   string
-	vibecopCfg config.Config
+	cfgFile        string
+	vibecopCfg     config.Config
+	vibecopCfgPath string
 )
 
 var rootCmd = &cobra.Command{
@@ -34,6 +35,7 @@ Runs in the background; attach the TUI to monitor activity.`,
 		if err != nil {
 			return err
 		}
+		vibecopCfgPath = path
 
 		// First-run: auto-launch setup for interactive commands only.
 		if cfgFile == "" {
@@ -60,6 +62,14 @@ Runs in the background; attach the TUI to monitor activity.`,
 // Only valid after PersistentPreRunE has run.
 func VibeCopConfig() config.Config {
 	return vibecopCfg
+}
+
+// VibeCopConfigPath returns the absolute path of the loaded config.toml.
+// Empty string until PersistentPreRunE has resolved it. Used by surfaces
+// that need to reference or edit the live config file (e.g. the TUI's
+// view/edit pane).
+func VibeCopConfigPath() string {
+	return vibecopCfgPath
 }
 
 // shouldTriggerSetup returns true if the named command should launch the

@@ -153,8 +153,15 @@ func TestAuditLoggerPending(t *testing.T) {
 
 	// Complete the pending record.
 	human := "blocked"
-	if err := l.CompletePending(key, human); err != nil {
+	finalised, err := l.CompletePending(key, human)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if finalised.ToolName != "Bash" {
+		t.Errorf("expected finalised record to round-trip ToolName, got %q", finalised.ToolName)
+	}
+	if finalised.HumanDecision == nil || *finalised.HumanDecision != human {
+		t.Errorf("expected finalised record HumanDecision=%q, got %v", human, finalised.HumanDecision)
 	}
 
 	// Verify the completed record is in the audit file.

@@ -76,6 +76,67 @@ func maxOf(vals []int64) int64 {
 	return m
 }
 
+// formatHHMMSS returns the HH:MM:SS slice of an RFC3339 timestamp,
+// shifted into the local zone when `local` is true. Falls back to
+// substring slicing when the timestamp doesn't parse — keeps the
+// renderer robust against legacy or malformed inputs without erroring
+// out the whole row. Pure for testability.
+func formatHHMMSS(rfc3339 string, local bool) string {
+	if rfc3339 == "" {
+		return ""
+	}
+	if local {
+		if t, err := time.Parse(time.RFC3339, rfc3339); err == nil {
+			return t.Local().Format("15:04:05")
+		}
+	}
+	// UTC path or unparseable: take the substring after the T marker.
+	ts := rfc3339
+	if i := strings.Index(ts, "T"); i >= 0 && len(ts) >= i+9 {
+		return ts[i+1 : i+9]
+	}
+	if len(ts) > 8 {
+		return ts[:8]
+	}
+	return ts
+}
+
+// formatLogTimestamp returns a compact YYYY-MM-DD HH:MM:SS slice of an
+// RFC3339 timestamp, shifted to local zone when `local` is true. Falls
+// back to the existing 19-char substring trick when parse fails. Pure
+// for testability.
+func formatLogTimestamp(rfc3339 string, local bool) string {
+	if rfc3339 == "" {
+		return ""
+	}
+	if local {
+		if t, err := time.Parse(time.RFC3339, rfc3339); err == nil {
+			return t.Local().Format("2006-01-02 15:04:05")
+		}
+	}
+	if len(rfc3339) > 19 {
+		return rfc3339[:19]
+	}
+	return rfc3339
+}
+
+// formatTimestampForDisplay returns a human-readable absolute timestamp
+// suitable for the detail sheet (no timezone abbreviations are appended;
+// the field label tells the reader which zone is in play). Pure.
+func formatTimestampForDisplay(rfc3339 string, local bool) string {
+	if rfc3339 == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return rfc3339
+	}
+	if local {
+		return t.Local().Format("2006-01-02 15:04:05 MST")
+	}
+	return t.UTC().Format("2006-01-02 15:04:05 UTC")
+}
+
 // verdictColor returns the tcell color for a verdict badge.
 func verdictColor(verdict string) tcell.Color {
 	switch verdict {
@@ -109,9 +170,11 @@ func verdictLabel(verdict string) string {
 const (
 	pageActivity     = "activity"
 	pageEscalations  = "escalations"
+	pageEscalDetail  = "escal-detail"
 	pageHelp         = "help"
 	pageFullscreen   = "fullscreen"
 	pageDetail       = "detail"
+	pageConfigView   = "config-view"
 	defaultPage      = pageActivity
 	refreshDebounce  = 250 * time.Millisecond
 	emptyEscalations = "[gray](no pending escalations)"
@@ -134,17 +197,34 @@ type App struct {
 	scanner    *bufio.Scanner
 	socketPath string
 
-	headerView  *tview.TextView
-	activity    *tview.Table
-	latencyView *tview.TextView
-	configView  *tview.TextView
-	logView     *tview.TextView
-	escalations *tview.List
-	escalEmpty  *tview.TextView
-	helpView    *tview.TextView
-	detailView  *tview.TextView
-	statusBar   *tview.TextView
-	pages       *tview.Pages
+	// displayLocalTime controls whether render-time formatting converts
+	// daemon-supplied UTC RFC3339 timestamps to the local zone before
+	// truncation. Defaults to true; the daemon honors the
+	// `daemon.display_local_time` config knob and ships the resolved
+	// value down via get_config. Read/written only on the tview main
+	// goroutine (UpdateConfig dispatches via QueueUpdateDraw), so no
+	// extra synchronization needed.
+	displayLocalTime bool
+
+	// configPath is the absolute path of the live config.toml as
+	// reported by the daemon. Empty until the first get_config response
+	// lands. Used by the config view/edit surface (VCOP-16.6) — the TUI
+	// must edit the live file, not a guessed default.
+	configPath string
+
+	headerView      *tview.TextView
+	activity        *tview.Table
+	latencyView     *tview.TextView
+	configView      *tview.TextView
+	logView         *tview.TextView
+	escalations     *tview.List
+	escalEmpty      *tview.TextView
+	escalDetailView *tview.TextView
+	configFileView  *tview.TextView
+	helpView        *tview.TextView
+	detailView      *tview.TextView
+	statusBar       *tview.TextView
+	pages           *tview.Pages
 
 	// Snapshot of the currently rendered escalation list. Accessed only on
 	// the application goroutine so it stays aligned with the visible rows.
@@ -170,7 +250,12 @@ type App struct {
 
 	latency       *latencyStats
 	events        int
+	denied        int
 	logHasEntries bool
+
+	// Stop signal for the header clock goroutine. Closed in Close() to
+	// terminate the ticker without leaking once the TUI exits.
+	clockDone chan struct{}
 
 	mu sync.Mutex
 }
@@ -198,11 +283,13 @@ func Run(socketPath string) error {
 	}
 
 	a := &App{
-		conn:        conn,
-		scanner:     bufio.NewScanner(conn),
-		socketPath:  socketPath,
-		latency:     &latencyStats{},
-		currentPage: defaultPage,
+		conn:             conn,
+		scanner:          bufio.NewScanner(conn),
+		socketPath:       socketPath,
+		latency:          &latencyStats{},
+		currentPage:      defaultPage,
+		displayLocalTime: true,
+		clockDone:        make(chan struct{}),
 	}
 
 	err = a.runUI()
@@ -228,10 +315,12 @@ func (a *App) runUI() error {
 	a.pages = tview.NewPages()
 	a.pages.AddPage(pageActivity, a.buildActivityPage(), true, true)
 	a.pages.AddPage(pageEscalations, a.buildEscalationsPage(), true, false)
+	a.pages.AddPage(pageEscalDetail, a.buildEscalDetailPage(), true, false)
 	a.pages.AddPage(pageHelp, a.buildHelpPage(), true, false)
 	a.fullscreenContainer = tview.NewFlex().SetDirection(tview.FlexRow)
 	a.pages.AddPage(pageFullscreen, a.fullscreenContainer, true, false)
 	a.pages.AddPage(pageDetail, a.buildDetailPage(), true, false)
+	a.pages.AddPage(pageConfigView, a.buildConfigViewPage(), true, false)
 	root.AddItem(a.pages, 0, 1, true)
 
 	// Status bar (context-aware).
@@ -254,6 +343,10 @@ func (a *App) runUI() error {
 	// first SetText queues against the loop without blocking even if it
 	// finishes before Run() begins draining updates.
 	go a.fetchAndRenderConfig()
+
+	// Header clock — re-renders once per second so the right-aligned
+	// time stays current. Stops on a.clockDone (closed in Close()).
+	go a.runClock()
 
 	a.app.SetRoot(root, true)
 	return a.app.Run()
@@ -283,6 +376,24 @@ func (a *App) buildActivityPage() tview.Primitive {
 		SetWordWrap(true)
 	a.configView.SetTitle("config").SetBorder(true)
 	a.configView.SetText("waiting for data...")
+	// Enter opens a read-only fullscreen view of the actual config.toml
+	// file. `e` launches $EDITOR on a temp copy with TOML validation
+	// before atomic replacement (VCOP-16.6). Other keys fall through to
+	// scrolling and global handlers.
+	a.configView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if a.currentPage != pageActivity {
+			return event
+		}
+		if event.Key() == tcell.KeyEnter {
+			a.openConfigView()
+			return nil
+		}
+		if event.Rune() == 'e' {
+			a.editConfigFile()
+			return nil
+		}
+		return event
+	})
 	// Config takes whatever vertical space the sidebar has left after
 	// the fixed-size latency and log slots.
 	rightPanel.AddItem(a.configView, 0, 1, false)
@@ -300,7 +411,18 @@ func (a *App) buildActivityPage() tview.Primitive {
 		SetScrollable(true).
 		SetWrap(false)
 	a.logView.SetTitle("log").SetBorder(true)
-	a.logView.SetText("[gray]idle  ([white]f[gray] to expand)[white]")
+	a.logView.SetText("[gray]idle  ([white]Enter[gray] / [white]f[gray] to expand)[white]")
+	// Enter on the focused log pane mirrors the global `f` shortcut so
+	// keyboard-only users discover expansion via the idle hint without
+	// having to memorise a separate hotkey. Other keys fall through to
+	// the TextView's default (scrolling), then the global capture.
+	a.logView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter && a.currentPage == pageActivity {
+			a.toggleFullscreen()
+			return nil
+		}
+		return event
+	})
 	rightPanel.AddItem(a.logView, 3, 0, false)
 
 	// Activity feed is a tview.Table so we get all three behaviors at
@@ -430,6 +552,244 @@ func (a *App) buildDetailPage() tview.Primitive {
 	return a.detailView
 }
 
+// buildEscalDetailPage builds the full-size escalation detail sheet —
+// pressing Enter on the escalations List opens it. Renders every field
+// of the highlighted PendingEntry. `a` and `d` complete-and-advance
+// (approve/deny → next pending entry); the page only auto-closes when
+// the user presses Esc, so an empty queue still displays a banner.
+func (a *App) buildEscalDetailPage() tview.Primitive {
+	a.escalDetailView = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft).
+		SetWrap(true).
+		SetWordWrap(true).
+		SetScrollable(true)
+	a.escalDetailView.SetTitle("escalation detail").SetBorder(true)
+	a.escalDetailView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEsc:
+			a.closeEscalDetail()
+			return nil
+		}
+		switch event.Rune() {
+		case 'a':
+			a.completeSelectedAndAdvance("approved")
+			return nil
+		case 'd':
+			a.completeSelectedAndAdvance("blocked")
+			return nil
+		}
+		return event
+	})
+	return a.escalDetailView
+}
+
+// openEscalDetail renders the highlighted pending entry into the
+// detail page and switches to it. If the queue is empty, the page
+// still opens but shows the empty banner so the user has a consistent
+// surface to act from.
+func (a *App) openEscalDetail() {
+	a.currentPage = pageEscalDetail
+	a.pages.SwitchToPage(pageEscalDetail)
+	a.app.SetFocus(a.escalDetailView)
+	a.renderEscalDetail()
+	a.updateStatusBar()
+}
+
+// closeEscalDetail returns from the detail page back to the escalations
+// list, restoring focus so the highlight cursor lives where the user
+// expects.
+func (a *App) closeEscalDetail() {
+	a.currentPage = pageEscalations
+	a.pages.SwitchToPage(pageEscalations)
+	if a.escalations != nil {
+		a.app.SetFocus(a.escalations)
+	}
+	a.updateStatusBar()
+}
+
+// renderEscalDetail repaints the detail view from the currently-
+// highlighted entry. Idempotent — safe to call after every queue
+// mutation. When no entries remain, renders an explicit empty banner
+// so the user knows their last action cleared the queue.
+func (a *App) renderEscalDetail() {
+	if a.escalDetailView == nil {
+		return
+	}
+	idx := -1
+	if a.escalations != nil {
+		idx = a.escalations.GetCurrentItem()
+	}
+	if idx < 0 || idx >= len(a.pending) {
+		a.escalDetailView.SetText(formatEscalDetailEmpty())
+		return
+	}
+	a.escalDetailView.SetText(formatEscalDetailContent(a.pending[idx], a.displayLocalTime))
+	a.escalDetailView.ScrollToBeginning()
+}
+
+// formatEscalDetailContent renders every field of a PendingEntry into
+// the rich detail view. Pure for testability.
+func formatEscalDetailContent(p daemon.PendingEntry, local bool) string {
+	var sb strings.Builder
+	colorName := verdictColor(p.Verdict).String()
+
+	sb.WriteString("\n")
+	writeField := func(label, value string) {
+		sb.WriteString(fmt.Sprintf("  [yellow]%-12s[white] %s\n", label+":", value))
+	}
+	writeField("Timestamp", emptyOrValue(formatTimestampForDisplay(p.Timestamp, local)))
+	writeField("Project", emptyOrValue(shortProjectHash(p.ProjectHash)))
+	writeField("Tool", emptyOrValue(p.Tool))
+	sb.WriteString(fmt.Sprintf("  [yellow]%-12s[white] [%s]%s[white]\n",
+		"Verdict:", colorName, verdictLabel(p.Verdict)))
+
+	if p.Input != "" {
+		sb.WriteString("\n  [yellow]Input:[white]\n")
+		sb.WriteString(indentBlock(p.Input, "    ") + "\n")
+	}
+	if p.Reason != "" {
+		sb.WriteString("\n  [yellow]Reason:[white]\n")
+		sb.WriteString(indentBlock(p.Reason, "    ") + "\n")
+	}
+
+	sb.WriteString("\n  [gray]── [white]a[gray]:approve  [white]d[gray]:deny  [white]Esc[gray]:back ──[white]\n")
+	return sb.String()
+}
+
+// formatEscalDetailEmpty is the banner shown when the queue is empty
+// but the user is still on the detail page (e.g. they just cleared
+// the last entry). Pure for testability.
+func formatEscalDetailEmpty() string {
+	return "\n  [gray](no pending escalations)[white]\n\n  [gray]Press [white]Esc[gray] to return to the queue.[white]\n"
+}
+
+// completeSelectedAndAdvance is the detail-page sibling of
+// completeSelected: after the daemon acknowledges the human decision,
+// the queue is refreshed and the detail view repaints with whichever
+// entry now sits at the prior index (clamped). Empty queue → the
+// empty banner.
+func (a *App) completeSelectedAndAdvance(humanDecision string) {
+	if a.escalations == nil || a.escalations.GetItemCount() == 0 {
+		return
+	}
+	idx := a.escalations.GetCurrentItem()
+	if idx < 0 || idx >= len(a.pending) {
+		return
+	}
+	target := a.pending[idx]
+
+	go func() {
+		if err := a.completePending(target.ProjectHash, target.Key, humanDecision); err != nil {
+			a.app.QueueUpdateDraw(func() {
+				a.escalDetailView.SetText(fmt.Sprintf("\n  [red]complete_pending failed: %v[white]\n", err))
+			})
+			return
+		}
+
+		// Force-refresh the queue so the rebuild lands before we
+		// repaint. requestEscalationRefresh is debounced; passing
+		// force=true bypasses the cooldown for this user-initiated
+		// action.
+		a.requestEscalationRefresh(true)
+
+		// Wait for the refresh goroutine to complete so the rebuild
+		// has settled before repaint. The simplest way to chain after
+		// `refreshEscalations` is a second QueueUpdateDraw — the main
+		// loop drains them in submission order, so by the time this
+		// runs the rebuilt list is in place.
+		a.app.QueueUpdateDraw(func() {
+			a.advanceAfterCompletion(idx)
+		})
+	}()
+}
+
+// advanceAfterCompletion picks the new selected index after a
+// completion: same idx if still in bounds, else last entry. Then
+// repaints. Runs on the tview main goroutine.
+func (a *App) advanceAfterCompletion(prevIdx int) {
+	if a.escalations == nil {
+		return
+	}
+	count := a.escalations.GetItemCount()
+	if count == 0 {
+		a.renderEscalDetail()
+		return
+	}
+	next := prevIdx
+	if next >= count {
+		next = count - 1
+	}
+	if next < 0 {
+		next = 0
+	}
+	a.escalations.SetCurrentItem(next)
+	a.renderEscalDetail()
+}
+
+// buildConfigViewPage builds the fullscreen read-only view of the
+// live config.toml file. Enter on the focused config sidebar opens it;
+// `e` from anywhere on this page jumps into $EDITOR with TOML
+// validation (configedit.go).
+func (a *App) buildConfigViewPage() tview.Primitive {
+	a.configFileView = tview.NewTextView().
+		SetDynamicColors(false).
+		SetTextAlign(tview.AlignLeft).
+		SetWrap(false).
+		SetScrollable(true)
+	a.configFileView.SetTitle("config.toml — read-only").SetBorder(true)
+	a.configFileView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc || event.Key() == tcell.KeyEnter {
+			a.closeConfigView()
+			return nil
+		}
+		if event.Rune() == 'e' {
+			a.editConfigFile()
+			return nil
+		}
+		return event
+	})
+	return a.configFileView
+}
+
+// openConfigView reads the current config.toml off disk and renders it
+// into the fullscreen read-only view. We always re-read at open time so
+// a previous edit pass is reflected without restarting the TUI. On read
+// failure the view shows the error rather than refusing to switch
+// pages — the user can still hit Esc to return.
+func (a *App) openConfigView() {
+	body := a.readConfigFileForView()
+	a.configFileView.SetText(body)
+	a.configFileView.ScrollToBeginning()
+	a.currentPage = pageConfigView
+	a.pages.SwitchToPage(pageConfigView)
+	a.app.SetFocus(a.configFileView)
+	a.updateStatusBar()
+}
+
+// closeConfigView returns from the fullscreen view back to the
+// activity page, restoring focus to whichever activity-page pane was
+// last active so the user lands where they expect.
+func (a *App) closeConfigView() {
+	a.currentPage = pageActivity
+	a.pages.SwitchToPage(pageActivity)
+	if len(a.activityFocusables) > 0 {
+		a.app.SetFocus(a.activityFocusables[a.activityFocusIdx])
+	}
+	a.updateStatusBar()
+}
+
+// readConfigFileForView returns the current config.toml content as a
+// scrollable string, or a friendly error banner. Pure logic separated
+// from the view so it's straightforward to unit test the failure
+// paths via t.TempDir.
+func (a *App) readConfigFileForView() string {
+	if a.configPath == "" {
+		return "(no config_path advertised by daemon — try restarting the TUI after the daemon's first get_config response)"
+	}
+	return readConfigFileBody(a.configPath)
+}
+
 // openDetail renders the event at activity table row `row` into the
 // detail sheet and switches to the detail page. Lookup is via the
 // Reference attached to col 0; if missing, the page just shows an
@@ -446,7 +806,7 @@ func (a *App) openDetail(row int) {
 	if !ok {
 		return
 	}
-	a.detailView.SetText(formatDetailContent(evt))
+	a.detailView.SetText(formatDetailContent(evt, a.displayLocalTime))
 	a.detailView.ScrollToBeginning()
 	a.currentPage = pageDetail
 	a.pages.SwitchToPage(pageDetail)
@@ -467,8 +827,9 @@ func (a *App) closeDetail() {
 }
 
 // formatDetailContent renders all fields we have for an event into a
-// human-readable rich view. Pure for testability.
-func formatDetailContent(evt daemon.Event) string {
+// human-readable rich view. Pure for testability. `local` shifts the
+// displayed timestamp into the user's zone when true.
+func formatDetailContent(evt daemon.Event, local bool) string {
 	var sb strings.Builder
 	colorName := verdictColor(evt.Verdict).String()
 
@@ -476,7 +837,7 @@ func formatDetailContent(evt daemon.Event) string {
 	writeField := func(label, value string) {
 		sb.WriteString(fmt.Sprintf("  [yellow]%-11s[white] %s\n", label+":", value))
 	}
-	writeField("Timestamp", emptyOrValue(evt.Timestamp))
+	writeField("Timestamp", emptyOrValue(formatTimestampForDisplay(evt.Timestamp, local)))
 	writeField("Tool", emptyOrValue(evt.Tool))
 	sb.WriteString(fmt.Sprintf("  [yellow]%-11s[white] [%s]%s[white]\n",
 		"Verdict:", colorName, verdictLabel(evt.Verdict)))
@@ -534,13 +895,19 @@ func helpText() string {
 		"    [white]←/→[gray]          horizontal scroll of long entries",
 		"    [white]Enter[gray]        open detail sheet for highlighted event",
 		"    [white]f[gray]            expand focused pane to fullscreen ([white]Esc[gray] / [white]f[gray] to collapse)",
+		"    [white]Enter[gray]        on the log pane: same as [white]f[gray] (expand to fullscreen)",
 		"    [white]r[gray]            refresh config",
 		"",
 		"  [yellow]Escalations page[white]",
 		"    [white]↑/↓[gray]          scroll pending list",
+		"    [white]Enter[gray]        open full-size detail with approve/deny controls",
 		"    [white]a[gray]            approve selected (audit only — agent already saw harness prompt)",
 		"    [white]d[gray]            deny selected (audit only)",
 		"    [white]R[gray]            refresh queue",
+		"",
+		"  [yellow]Config pane (sidebar)[white]",
+		"    [white]Enter[gray]        open read-only fullscreen view of the live config.toml",
+		"    [white]e[gray]            edit config.toml in [white]$EDITOR[gray] (TOML-validated, atomic save)",
 		"",
 		"  [gray]Press any key to close help.",
 	}, "\n")
@@ -597,6 +964,12 @@ func (a *App) globalInput(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		case pageDetail:
 			a.closeDetail()
+			return nil
+		case pageEscalDetail:
+			a.closeEscalDetail()
+			return nil
+		case pageConfigView:
+			a.closeConfigView()
 			return nil
 		}
 	}
@@ -661,9 +1034,14 @@ func (a *App) toggleFullscreen() {
 }
 
 // escalationsInput handles keys when the escalations List is focused.
-// The List itself absorbs ↑/↓; we intercept `a` and `d` for verdicts
-// and let everything else fall through to globalInput.
+// The List itself absorbs ↑/↓; we intercept `a` and `d` for verdicts,
+// `Enter` to open the full-size detail page, and let everything else
+// fall through to globalInput.
 func (a *App) escalationsInput(event *tcell.EventKey) *tcell.EventKey {
+	if event.Key() == tcell.KeyEnter {
+		a.openEscalDetail()
+		return nil
+	}
 	switch event.Rune() {
 	case 'a':
 		a.completeSelected("approved")
@@ -724,7 +1102,11 @@ func (a *App) updateStatusBar() {
 	case pageActivity:
 		hint = "[white]q[gray]:quit  [white]e[gray]:escalations  [white]↑/↓[gray]:select  [white]Enter[gray]:detail  [white]Tab[gray]:next pane  [white]f[gray]:fullscreen  [white]r[gray]:refresh"
 	case pageEscalations:
-		hint = "[white]q[gray]:quit  [white]a[gray]:approve  [white]d[gray]:deny  [white]R[gray]:refresh  [white]Esc[gray]:back"
+		hint = "[white]q[gray]:quit  [white]Enter[gray]:detail  [white]a[gray]:approve  [white]d[gray]:deny  [white]R[gray]:refresh  [white]Esc[gray]:back"
+	case pageEscalDetail:
+		hint = "[white]q[gray]:quit  [white]a[gray]:approve+next  [white]d[gray]:deny+next  [white]Esc[gray]:back to list"
+	case pageConfigView:
+		hint = "[white]q[gray]:quit  [white]e[gray]:edit  [white]Esc[gray] / [white]Enter[gray]:back"
 	case pageHelp:
 		hint = "[gray]press any key to close help"
 	case pageFullscreen:
@@ -764,6 +1146,9 @@ func (a *App) readEvents() {
 func (a *App) handleEvent(evt daemon.Event) {
 	a.mu.Lock()
 	a.events++
+	if evt.Verdict == "deny" {
+		a.denied++
+	}
 	a.mu.Unlock()
 
 	// Log-level events go to the log tail.
@@ -796,7 +1181,7 @@ func (a *App) handleEvent(evt daemon.Event) {
 // away to another pane, no compensation is needed and the table
 // scrolls naturally.
 func (a *App) addActivity(evt daemon.Event) {
-	ts, verdict, tool, body, vColor := formatActivityCells(evt)
+	ts, verdict, tool, body, vColor := formatActivityCells(evt, a.displayLocalTime)
 
 	a.app.QueueUpdateDraw(func() {
 		focused := a.app.GetFocus() == a.activity
@@ -842,16 +1227,11 @@ func (a *App) addActivity(evt daemon.Event) {
 // Pure (no tview state) so it can be unit-tested. The right-most cell
 // (body) holds input + optional reason at full length — nothing is
 // truncated; horizontal scroll reveals everything off-screen.
-func formatActivityCells(evt daemon.Event) (ts, verdict, tool, body string, vColor tcell.Color) {
-	// Timestamps from the daemon are RFC3339-ish; show just HH:MM:SS
-	// in the embedded view. The full timestamp is still visible in
-	// the audit log and on the detail sheet.
-	ts = evt.Timestamp
-	if i := strings.Index(ts, "T"); i >= 0 && len(ts) >= i+9 {
-		ts = ts[i+1 : i+9]
-	} else if len(ts) > 8 {
-		ts = ts[:8]
-	}
+//
+// `local` controls whether the HH:MM:SS slice is taken in the user's
+// local zone or the daemon's UTC zone (see App.displayLocalTime).
+func formatActivityCells(evt daemon.Event, local bool) (ts, verdict, tool, body string, vColor tcell.Color) {
+	ts = formatHHMMSS(evt.Timestamp, local)
 
 	verdict = verdictLabel(evt.Verdict)
 	vColor = verdictColor(evt.Verdict)
@@ -883,10 +1263,7 @@ func (a *App) addLogLine(evt daemon.Event) {
 		levelColor = "green"
 	}
 
-	ts := evt.Timestamp
-	if len(ts) > 19 {
-		ts = ts[:19] // strip timezone for display
-	}
+	ts := formatLogTimestamp(evt.Timestamp, a.displayLocalTime)
 	line := fmt.Sprintf("[%s]%s[white] [gray]%s[white] %s", levelColor, strings.ToUpper(evt.Level), ts, evt.Message)
 
 	a.app.QueueUpdateDraw(func() {
@@ -938,13 +1315,125 @@ func (a *App) updateLatencyDisplay() {
 	})
 }
 
+// updateHeader renders the top bar. Three logical segments:
+//
+//   - Left:   "vibecop ● running  events: N"
+//   - Centre: "denied: N  escalations: N" (red / orange counters)
+//   - Right:  local clock "HH:MM:SS" (or UTC if displayLocalTime=false)
+//
+// When the terminal is too narrow for all three, the clock is dropped
+// first; the counters are kept because they're load-bearing signal.
+// Pure rendering happens in renderHeaderLine so we can unit-test the
+// layout decisions without standing up a tview.Application.
 func (a *App) updateHeader(_ daemon.Event) {
 	a.app.QueueUpdateDraw(func() {
-		a.headerView.SetText(fmt.Sprintf(
-			"[green]vibecop[white] ● running  |  events: %d",
-			a.events,
-		))
+		a.redrawHeader()
 	})
+}
+
+// redrawHeader runs on the tview goroutine. Reads counters under the
+// mutex, computes the available inner width, and writes the formatted
+// line.
+func (a *App) redrawHeader() {
+	if a.headerView == nil {
+		return
+	}
+	a.mu.Lock()
+	events := a.events
+	denied := a.denied
+	pending := len(a.pending)
+	a.mu.Unlock()
+
+	_, _, width, _ := a.headerView.GetInnerRect()
+	clock := currentClock(time.Now(), a.displayLocalTime)
+	line := renderHeaderLine(events, denied, pending, clock, width)
+	a.headerView.SetText(line)
+}
+
+// currentClock formats the wall clock for the header. Wraps time.Now
+// behind a parameter so tests can pass a fixed instant.
+func currentClock(now time.Time, local bool) string {
+	if local {
+		return now.Local().Format("15:04:05")
+	}
+	return now.UTC().Format("15:04:05") + " UTC"
+}
+
+// renderHeaderLine composes the formatted header. width is the
+// header's inner content width (columns); when ≤0 the right-aligned
+// segment is omitted (e.g. before the first draw, where GetInnerRect
+// returns 0). Pure for testability.
+//
+// The trailing-time placement uses tview.AlignRight semantics achieved
+// by padding with spaces against the *visible* width — colour escape
+// codes don't render, so we measure them out before computing pad.
+func renderHeaderLine(events, denied, pending int, clock string, width int) string {
+	const (
+		leftFmt   = "[green]vibecop[white] ● running  events: %d"
+		centerFmt = "  |  [red]denied: %d[white]  [orange]escalations: %d[white]"
+	)
+	left := fmt.Sprintf(leftFmt, events)
+	centre := fmt.Sprintf(centerFmt, denied, pending)
+	body := left + centre
+
+	if width <= 0 || clock == "" {
+		return body
+	}
+	visible := visibleLength(body)
+	clockLen := len(clock)
+	// Need at least 2 spaces of separation between the centre and the
+	// right-aligned clock; otherwise the clock would butt into the
+	// counters and read as a single line.
+	const minGap = 2
+	if visible+minGap+clockLen > width {
+		return body
+	}
+	pad := width - visible - clockLen
+	return body + strings.Repeat(" ", pad) + "[gray]" + clock + "[white]"
+}
+
+// visibleLength returns the number of terminal columns a tview-coloured
+// string occupies, by stripping `[…]` colour tags. tview's tag syntax
+// is `[<fg>[:<bg>[:<flags>]]]`; tags that aren't the empty `[]` literal
+// are removed entirely. Approximate but sufficient for header layout —
+// we use a conservative gap when unsure.
+func visibleLength(s string) int {
+	n := 0
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '[':
+			inTag = true
+		case r == ']':
+			inTag = false
+		case inTag:
+			// Skip tag contents.
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// runClock pumps a header redraw once per second so the right-aligned
+// time advances. Exits when Close() closes a.clockDone, which is the
+// only safe shutdown signal — calling QueueUpdateDraw on a stopped
+// Application is a no-op (writes to a closed channel) but the
+// goroutine still leaks if we don't drain it.
+func (a *App) runClock() {
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.clockDone:
+			return
+		case <-t.C:
+			if a.app == nil || a.headerView == nil {
+				continue
+			}
+			a.app.QueueUpdateDraw(a.redrawHeader)
+		}
+	}
 }
 
 // refreshConfig runs on the tview main goroutine (input handler). The
@@ -971,7 +1460,7 @@ func (a *App) fetchAndRenderConfig() {
 		})
 		return
 	}
-	a.UpdateConfig(cfg.Endpoint, cfg.APIFormat, cfg.Model, cfg.TimeoutMs, cfg.AuditEnabled)
+	a.UpdateConfig(cfg)
 }
 
 // fetchConfig issues get_config and returns the daemon's effective
@@ -993,16 +1482,22 @@ func (a *App) fetchConfig() (daemon.ConfigResponse, error) {
 	return resp, nil
 }
 
-// UpdateConfig is called externally (or on timer) to refresh the config display.
-func (a *App) UpdateConfig(endpoint, apiFormat, model string, timeoutMs int, auditEnabled bool) {
-	text := fmt.Sprintf("endpoint: [green]%s[white]\n", endpoint)
-	text += fmt.Sprintf("format:   %s\n", apiFormat)
-	text += fmt.Sprintf("model:    [yellow]%s[white]\n", model)
-	text += fmt.Sprintf("timeout:  %d ms\n", timeoutMs)
-	text += fmt.Sprintf("audit:    %v", auditEnabled)
+// UpdateConfig is called externally (or on timer) to refresh the config
+// display. The whole `daemon.ConfigResponse` is taken so display-time
+// preferences (display_local_time, config_path) propagate alongside the
+// user-visible fields without growing the function signature each time
+// a new field is added to the wire shape.
+func (a *App) UpdateConfig(cfg daemon.ConfigResponse) {
+	text := fmt.Sprintf("endpoint: [green]%s[white]\n", cfg.Endpoint)
+	text += fmt.Sprintf("format:   %s\n", cfg.APIFormat)
+	text += fmt.Sprintf("model:    [yellow]%s[white]\n", cfg.Model)
+	text += fmt.Sprintf("timeout:  %d ms\n", cfg.TimeoutMs)
+	text += fmt.Sprintf("audit:    %v", cfg.AuditEnabled)
 
 	a.app.QueueUpdateDraw(func() {
 		a.configView.SetText(text)
+		a.displayLocalTime = cfg.DisplayLocalTime
+		a.configPath = cfg.ConfigPath
 	})
 }
 
@@ -1115,6 +1610,10 @@ func (a *App) rebuildEscalationList(pending []daemon.PendingEntry, auditEnabled 
 	if idx := findPendingIndex(a.pending, prevProjectHash, prevKey); idx >= 0 {
 		a.escalations.SetCurrentItem(idx)
 	}
+
+	// The header surfaces len(a.pending) — refresh it whenever the
+	// queue state changes so the badge doesn't lag the list view.
+	a.redrawHeader()
 }
 
 // emptyBannerFor returns the banner text for the escalation page.
@@ -1238,8 +1737,18 @@ func (a *App) finishEscalationRefresh() {
 	a.mu.Unlock()
 }
 
-// Close shuts down the TUI and disconnects from the daemon.
+// Close shuts down the TUI and disconnects from the daemon. Idempotent
+// — guarded so a double Close (via defer + an earlier panic recovery)
+// doesn't panic on close-of-closed-channel.
 func (a *App) Close() {
+	if a.clockDone != nil {
+		select {
+		case <-a.clockDone:
+			// Already closed.
+		default:
+			close(a.clockDone)
+		}
+	}
 	if a.conn != nil {
 		a.conn.Close()
 	}

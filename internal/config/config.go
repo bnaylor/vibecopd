@@ -15,6 +15,10 @@ type DaemonConfig struct {
 	TimeoutMs      int  `toml:"timeout_ms"`
 	ActivityWindow int  `toml:"activity_window"`
 	AuditEnabled   bool `toml:"audit_enabled"`
+	// DisplayLocalTime controls whether the TUI renders timestamps in
+	// the user's local zone (true) or UTC (false). Audit logs stay UTC
+	// regardless — invariant 5 (audit log is permanent record).
+	DisplayLocalTime bool `toml:"display_local_time"`
 }
 
 // ModelConfig describes the LLM endpoint.
@@ -66,10 +70,11 @@ const (
 func DefaultConfig() Config {
 	return Config{
 		Daemon: DaemonConfig{
-			Enabled:        true,
-			TimeoutMs:      DefaultTimeoutMs,
-			ActivityWindow: DefaultActivityWindow,
-			AuditEnabled:   false,
+			Enabled:          true,
+			TimeoutMs:        DefaultTimeoutMs,
+			ActivityWindow:   DefaultActivityWindow,
+			AuditEnabled:     false,
+			DisplayLocalTime: true,
 		},
 		Model: ModelConfig{
 			Endpoint:  "",

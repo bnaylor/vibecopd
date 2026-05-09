@@ -66,14 +66,17 @@ var startCmd = &cobra.Command{
 
 		d.OnPermission(makePermissionHandler(ec, d, tp, cfg.Daemon.ActivityWindow, cfg.Daemon.AuditEnabled, cfg.Model.Model, cfg.Model.APIFormat, stores, loggers, &storesMu))
 		d.OnListPending(makeListPendingHandler(loggers, &storesMu, cfg.Daemon.AuditEnabled))
-		d.OnCompletePending(makeCompletePendingHandler(loggers, &storesMu))
+		d.OnCompletePending(makeCompletePendingHandler(loggers, stores, cfg.Daemon.ActivityWindow, &storesMu))
+		configPath := VibeCopConfigPath()
 		d.OnGetConfig(func() daemon.ConfigResponse {
 			return daemon.ConfigResponse{
-				Endpoint:     cfg.Model.Endpoint,
-				APIFormat:    cfg.Model.APIFormat,
-				Model:        cfg.Model.Model,
-				TimeoutMs:    cfg.Daemon.TimeoutMs,
-				AuditEnabled: cfg.Daemon.AuditEnabled,
+				Endpoint:         cfg.Model.Endpoint,
+				APIFormat:        cfg.Model.APIFormat,
+				Model:            cfg.Model.Model,
+				TimeoutMs:        cfg.Daemon.TimeoutMs,
+				AuditEnabled:     cfg.Daemon.AuditEnabled,
+				DisplayLocalTime: cfg.Daemon.DisplayLocalTime,
+				ConfigPath:       configPath,
 			}
 		})
 
@@ -331,6 +334,8 @@ func makeListPendingHandler(
 
 func makeCompletePendingHandler(
 	loggers map[string]*audit.Logger,
+	stores map[string]*audit.ActivityStore,
+	activityWindow int,
 	storesMu *sync.Mutex,
 ) func(string, string, string) error {
 	return func(projectHash, key, humanDecision string) error {
@@ -340,7 +345,54 @@ func makeCompletePendingHandler(
 		if !ok {
 			return fmt.Errorf("no logger for project %q", projectHash)
 		}
-		return l.CompletePending(key, humanDecision)
+		rec, err := l.CompletePending(key, humanDecision)
+		if err != nil {
+			return err
+		}
+
+		// Mirror the human decision into the rolling activity store so
+		// the LLM's recent-activity context reflects post-escalation
+		// outcomes rather than only the original "escalate" verdict.
+		// Without this, a user who repeatedly approves the same
+		// escalated tool sees no learning signal in subsequent
+		// evaluations — the "decision tree" the user mentioned in
+		// VCOP-16 scope.
+		//
+		// Lazily creating the store mirrors the permission handler's
+		// pattern (it does the same get-or-create dance keyed on
+		// projectHash) — escalations resolved without ever issuing a
+		// permission_request first are unlikely in practice but stay
+		// safe here.
+		storesMu.Lock()
+		store, ok := stores[projectHash]
+		if !ok {
+			store = audit.NewActivityStore(projectHash, activityWindow)
+			store.Load()
+			stores[projectHash] = store
+		}
+		storesMu.Unlock()
+
+		store.Append(rec.ToolName, rec.ToolInput, mapHumanDecisionToVerdict(humanDecision))
+		if err := store.Save(); err != nil {
+			log.Printf("activity: post-escalation save error: %v", err)
+		}
+		return nil
+	}
+}
+
+// mapHumanDecisionToVerdict translates the daemon's human_decision wire
+// values ("approved" / "blocked") into the activity-log verdict
+// vocabulary ("approve" / "deny") so the LLM context reads in the same
+// shape as native LLM verdicts. Unknown inputs round-trip — defensive
+// against future TUI/protocol additions.
+func mapHumanDecisionToVerdict(humanDecision string) string {
+	switch humanDecision {
+	case "approved":
+		return "approve"
+	case "blocked":
+		return "deny"
+	default:
+		return humanDecision
 	}
 }
 

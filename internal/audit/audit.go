@@ -98,10 +98,14 @@ func (l *Logger) WritePending(rec AuditRecord) (string, error) {
 }
 
 // CompletePending finalizes a pending record with the human's decision
-// and writes it to the audit file.
-func (l *Logger) CompletePending(key string, humanDecision string) error {
+// and writes it to the audit file. Returns the finalised record so
+// callers can mirror the human decision into other surfaces (e.g. the
+// rolling activity store used as LLM context). The returned record is
+// zero-valued when the logger is disabled or the key is unknown — the
+// error result remains the source of truth for success/failure.
+func (l *Logger) CompletePending(key string, humanDecision string) (AuditRecord, error) {
 	if !l.enabled {
-		return nil
+		return AuditRecord{}, nil
 	}
 
 	l.mu.Lock()
@@ -110,11 +114,14 @@ func (l *Logger) CompletePending(key string, humanDecision string) error {
 	l.mu.Unlock()
 
 	if !ok {
-		return fmt.Errorf("pending record not found: %s", key)
+		return AuditRecord{}, fmt.Errorf("pending record not found: %s", key)
 	}
 
 	rec.HumanDecision = &humanDecision
-	return l.Write(*rec)
+	if err := l.Write(*rec); err != nil {
+		return AuditRecord{}, err
+	}
+	return *rec, nil
 }
 
 // ListPending returns a snapshot of the in-memory pending records.

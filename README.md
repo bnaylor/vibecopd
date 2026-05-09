@@ -116,10 +116,11 @@ existing entry in place rather than appending a duplicate.
 **Haiku (recommended):**
 ```toml
 [daemon]
-enabled         = true
-timeout_ms      = 5000
-activity_window = 10
-audit_enabled   = false
+enabled            = true
+timeout_ms         = 5000
+activity_window    = 10
+audit_enabled      = false
+display_local_time = true  # TUI renders times in local zone (false → UTC)
 
 [model]
 endpoint   = "https://api.anthropic.com/v1/messages"

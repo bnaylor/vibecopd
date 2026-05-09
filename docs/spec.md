@@ -41,10 +41,11 @@ vibecop/
 
 ```toml
 [daemon]
-enabled       = true
-timeout_ms    = 5000   # fail-open after this many ms; default 5000
-activity_window = 10   # recent verdicts sent as context; default 10
-audit_enabled = false  # write permanent audit logs; default off
+enabled            = true
+timeout_ms         = 5000  # fail-open after this many ms; default 5000
+activity_window    = 10    # recent verdicts sent as context; default 10
+audit_enabled      = false # write permanent audit logs; default off
+display_local_time = true  # TUI renders timestamps in local zone (false → UTC); audit logs are always UTC
 
 [model]
 endpoint   = "https://api.anthropic.com/v1/messages"
@@ -159,8 +160,8 @@ After subscribing, the daemon streams newline-terminated event objects to the TU
 **TUI ad-hoc requests** (each on a fresh short-lived connection, mirroring the hook pattern):
 
 - `{ "type": "list_pending" }` → `{ "pending": [...], "audit_enabled": bool }` — snapshot of in-memory pending audit records (see *Escalations page*).
-- `{ "type": "complete_pending", "key": "...", "project_hash": "...", "human_decision": "approved" | "blocked" }` → `{ "ok": bool, "error": "..." }` — finalises the audit record routed by `project_hash`.
-- `{ "type": "get_config" }` → `{ "endpoint": "...", "api_format": "...", "model": "...", "timeout_ms": N, "audit_enabled": bool }` — daemon's effective config snapshot for the TUI's config panel. Excludes the API key by construction.
+- `{ "type": "complete_pending", "key": "...", "project_hash": "...", "human_decision": "approved" | "blocked" }` → `{ "ok": bool, "error": "..." }` — finalises the audit record routed by `project_hash`. The daemon also mirrors the human decision into the project's rolling activity store (verdict mapped `approved` → `approve`, `blocked` → `deny`) so the LLM's recent-activity context reflects post-escalation outcomes.
+- `{ "type": "get_config" }` → `{ "endpoint": "...", "api_format": "...", "model": "...", "timeout_ms": N, "audit_enabled": bool, "display_local_time": bool, "config_path": "..." }` — daemon's effective config snapshot for the TUI's config panel. Excludes the API key by construction. `config_path` is the absolute path to the live `config.toml` and lets the TUI's view/edit surface always target the file the daemon actually loaded.
 
 ### Hook scripts
 

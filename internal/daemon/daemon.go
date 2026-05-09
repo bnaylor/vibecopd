@@ -78,11 +78,16 @@ type CompleteResponse struct {
 // daemon/model config the TUI displays. Excludes secrets (api_key) by
 // construction — the TUI must never need them.
 type ConfigResponse struct {
-	Endpoint     string `json:"endpoint"`
-	APIFormat    string `json:"api_format"`
-	Model        string `json:"model"`
-	TimeoutMs    int    `json:"timeout_ms"`
-	AuditEnabled bool   `json:"audit_enabled"`
+	Endpoint         string `json:"endpoint"`
+	APIFormat        string `json:"api_format"`
+	Model            string `json:"model"`
+	TimeoutMs        int    `json:"timeout_ms"`
+	AuditEnabled     bool   `json:"audit_enabled"`
+	DisplayLocalTime bool   `json:"display_local_time"`
+	// ConfigPath is the absolute path to the loaded config.toml. The TUI
+	// uses this for the "view / edit" surface so the user always edits
+	// the live file rather than a guessed path.
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 // Event streamed to TUI subscribers.

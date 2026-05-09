@@ -216,7 +216,8 @@ func TestFormatActivityCellsNoTruncation(t *testing.T) {
 		Verdict:   "approve",
 		Timestamp: "2026-05-08T20:13:01Z",
 	}
-	ts, _, _, body, _ := formatActivityCells(evt)
+	// UTC mode: substring-truncated timestamp, no zone shift.
+	ts, _, _, body, _ := formatActivityCells(evt, false)
 	if !strings.Contains(body, longInput) {
 		t.Fatalf("expected full input preserved (no ellipsis); got: %q", body)
 	}
@@ -236,7 +237,7 @@ func TestFormatActivityCellsWithReason(t *testing.T) {
 		Reason:    "Critical system file",
 		Timestamp: "2026-05-08T20:13:01Z",
 	}
-	_, verdict, tool, body, _ := formatActivityCells(evt)
+	_, verdict, tool, body, _ := formatActivityCells(evt, false)
 	if !strings.Contains(body, "rm -rf /etc/passwd") {
 		t.Errorf("expected input in body; got: %q", body)
 	}
@@ -262,9 +263,9 @@ func TestFormatDetailContentRendersAllFields(t *testing.T) {
 		Level:     "warn",
 		Message:   "synthetic test message",
 	}
-	got := formatDetailContent(evt)
+	got := formatDetailContent(evt, false) // UTC mode for stable assertions
 	for _, want := range []string{
-		"2026-05-08T20:13:01Z", // full timestamp on detail sheet
+		"2026-05-08 20:13:01 UTC", // formatted absolute timestamp on detail sheet
 		"Bash",
 		"DENIED",
 		"345 ms",
@@ -289,7 +290,7 @@ func TestFormatDetailContentHandlesEmptyFields(t *testing.T) {
 		Verdict:   "approve",
 		Timestamp: "2026-05-08T20:13:01Z",
 	}
-	got := formatDetailContent(evt)
+	got := formatDetailContent(evt, false)
 	if strings.Contains(got, "Reason:") {
 		t.Errorf("empty reason should be omitted; got: %s", got)
 	}
@@ -424,6 +425,155 @@ func newTestApp() *App {
 	a.pages.AddPage(pageEscalations, tview.NewBox(), true, false)
 	a.pages.AddPage(pageHelp, tview.NewBox(), true, false)
 	return a
+}
+
+func TestFormatHHMMSS(t *testing.T) {
+	// UTC mode: no zone shift, HH:MM:SS substring.
+	if got := formatHHMMSS("2026-05-08T20:13:01Z", false); got != "20:13:01" {
+		t.Errorf("UTC mode: expected 20:13:01, got %q", got)
+	}
+	if got := formatHHMMSS("", false); got != "" {
+		t.Errorf("empty input should produce empty output, got %q", got)
+	}
+	// Local mode with a fixed offset RFC3339 input. We can't predict the
+	// machine's local zone, so assert format shape (HH:MM:SS) and that
+	// it's a valid time-of-day, not a specific value.
+	got := formatHHMMSS("2026-05-08T20:13:01Z", true)
+	if len(got) != 8 || got[2] != ':' || got[5] != ':' {
+		t.Errorf("local-mode output should be HH:MM:SS, got %q", got)
+	}
+	// Unparseable input falls back to substring slicing rather than
+	// erroring out.
+	if got := formatHHMMSS("not-a-timestamp", true); got != "not-a-ti" {
+		t.Errorf("malformed input should fall back to 8-char substring, got %q", got)
+	}
+}
+
+func TestFormatTimestampForDisplayUTC(t *testing.T) {
+	got := formatTimestampForDisplay("2026-05-08T20:13:01Z", false)
+	if got != "2026-05-08 20:13:01 UTC" {
+		t.Errorf("UTC mode: expected stable format, got %q", got)
+	}
+	if got := formatTimestampForDisplay("", false); got != "" {
+		t.Errorf("empty input should produce empty output, got %q", got)
+	}
+	// Unparseable input round-trips so we never silently drop data on
+	// the detail sheet.
+	if got := formatTimestampForDisplay("garbage", true); got != "garbage" {
+		t.Errorf("malformed input should round-trip, got %q", got)
+	}
+}
+
+func TestFormatLogTimestamp(t *testing.T) {
+	if got := formatLogTimestamp("2026-05-08T20:13:01Z", false); got != "2026-05-08T20:13:01" {
+		t.Errorf("UTC mode: expected substring of input, got %q", got)
+	}
+	got := formatLogTimestamp("2026-05-08T20:13:01Z", true)
+	if len(got) != 19 || got[10] != ' ' {
+		t.Errorf("local mode: expected 'YYYY-MM-DD HH:MM:SS', got %q", got)
+	}
+}
+
+func TestFormatEscalDetailContentRendersAllFields(t *testing.T) {
+	p := daemon.PendingEntry{
+		Key:         "Bash|2026-05-09T12:00:00Z|1",
+		ProjectHash: "deadbeefcafebabe1234",
+		Tool:        "Bash",
+		Input:       "rm -rf /var/log",
+		Verdict:     "escalate",
+		Reason:      "destructive command pattern",
+		Timestamp:   "2026-05-09T12:00:00Z",
+	}
+	got := formatEscalDetailContent(p, false)
+	for _, want := range []string{
+		"Bash",
+		"rm -rf /var/log",
+		"ESCALATED",
+		"destructive command pattern",
+		"deadbeefcafe", // shortened project hash (12-char prefix)
+		"a[gray]:approve",
+		"d[gray]:deny",
+		"Esc[gray]:back",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("escal detail missing %q; got: %s", want, got)
+		}
+	}
+}
+
+func TestFormatEscalDetailEmptyMentionsEsc(t *testing.T) {
+	got := formatEscalDetailEmpty()
+	if !strings.Contains(got, "Esc") {
+		t.Errorf("empty banner should reference Esc to back out, got: %q", got)
+	}
+	if !strings.Contains(got, "no pending") {
+		t.Errorf("empty banner should explain why, got: %q", got)
+	}
+}
+
+func TestRenderHeaderLineIncludesCounters(t *testing.T) {
+	got := renderHeaderLine(42, 7, 3, "12:34:56", 200)
+	for _, want := range []string{
+		"events: 42",
+		"[red]denied: 7[white]",
+		"[orange]escalations: 3[white]",
+		"12:34:56",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("header missing %q in output: %q", want, got)
+		}
+	}
+}
+
+func TestRenderHeaderLineDropsClockOnNarrowTerminal(t *testing.T) {
+	// Width 30 is too narrow to fit the body + clock with min gap; the
+	// renderer must drop the right-aligned clock rather than overflow
+	// or overlap counters.
+	got := renderHeaderLine(1, 0, 0, "12:34:56", 30)
+	if strings.Contains(got, "12:34:56") {
+		t.Errorf("expected clock to be dropped on narrow terminal, got: %q", got)
+	}
+	if !strings.Contains(got, "events: 1") {
+		t.Errorf("counters must always render; got: %q", got)
+	}
+}
+
+func TestRenderHeaderLineWidthZeroDropsClock(t *testing.T) {
+	// Before the first draw GetInnerRect returns 0; we must still
+	// render a usable line without trying to right-align the clock.
+	got := renderHeaderLine(0, 0, 0, "12:34:56", 0)
+	if strings.Contains(got, "12:34:56") {
+		t.Errorf("expected clock to be omitted at width=0, got: %q", got)
+	}
+}
+
+func TestVisibleLengthStripsTags(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"abc", 3},
+		{"[red]abc[white]", 3},
+		{"[red]a[white]bc", 3},
+		{"", 0},
+	}
+	for _, c := range cases {
+		if got := visibleLength(c.in); got != c.want {
+			t.Errorf("visibleLength(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCurrentClockShape(t *testing.T) {
+	fixed := time.Date(2026, 5, 9, 12, 34, 56, 0, time.UTC)
+	if got := currentClock(fixed, false); got != "12:34:56 UTC" {
+		t.Errorf("UTC clock: expected '12:34:56 UTC', got %q", got)
+	}
+	got := currentClock(fixed, true)
+	// Local zone varies by host — just assert HH:MM:SS shape.
+	if len(got) != 8 || got[2] != ':' || got[5] != ':' {
+		t.Errorf("local clock: expected HH:MM:SS, got %q", got)
+	}
 }
 
 func TestMinMax(t *testing.T) {
