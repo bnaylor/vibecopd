@@ -215,7 +215,9 @@ The TUI is organised as a `tview.Pages` tree with three pages — **activity** (
 - **Activity feed**: scrollable list of recent verdicts — tool name, input summary, verdict badge (Approved / Escalated / Denied / Human: Approved / Human: Blocked), reason on expand, timestamp
 - **Latency panel**: rolling average round-trip latency (last 50 requests), sample count, min/max
 - **Config summary**: active endpoint, model, timeout setting
-- **Log tail**: recent daemon log lines
+- **Log peek**: a 1-row borderless line at the bottom showing the most recent daemon log entry (or `log: idle` when there's been no activity). The full multi-line history is preserved internally — focus the log line and press `f` to expand it to a fullscreen scrollback view.
+
+Any of the four panels can be expanded to a fullscreen view via `f`; press `f` or `Esc` again to collapse back to the split layout. The same primitive is referenced by both the embedded layout and the fullscreen container — only the visible Pages page draws, so there's no layout collision.
 
 **Escalations page**: lists in-memory pending audit records (those with verdict `escalate` or `error` whose `humanDecision` is still `null`). Each row shows the project hash, tool, truncated input, reason, and timestamp. Approving (`a`) or denying (`d`) finalises the audit record via the daemon's new `complete_pending` request, writing `humanDecision: "approved" | "blocked"` to the daily audit file. The agent's hook has already exited — this surface is a record-keeper / audit-completer, not a verdict gateway. The auto-refresh on incoming `escalate` events is debounced to ~250 ms, with at most one refresh dial in flight at a time.
 
@@ -226,7 +228,7 @@ The TUI is organised as a `tview.Pages` tree with three pages — **activity** (
 Keyboard:
 
 - Global: `q` quit, `?` / `h` toggle help, `e` switch to escalations, `Esc` back to activity.
-- Activity: `Tab` / `Shift-Tab` cycle focus across panes (activity → latency → config → log → activity); the focused pane has a yellow border. `↑/↓` scrolls within the focused pane. `r` refreshes the config pane from the daemon.
+- Activity: `Tab` / `Shift-Tab` cycle focus across panes (activity → latency → config → log → activity); the focused pane has a yellow border. `↑/↓` scrolls within the focused pane. `f` expands the focused pane to fullscreen (`f` or `Esc` collapses back). `r` refreshes the config pane from the daemon.
 - Escalations: `↑/↓` scroll, `a` approve (audit), `d` deny (audit), `R` refresh queue.
 
 The escalation queue model is **non-blocking** by design: the daemon does not hold the hook connection open while a human decides. Holding open would invert the fail-open invariant (an absent operator stalls the agent indefinitely) and conflict with the harness's own PreToolUse timeout. A blocking-hold variant could be added later as an opt-in mode.

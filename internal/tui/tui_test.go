@@ -154,6 +154,57 @@ func TestHelpTextSections(t *testing.T) {
 	}
 }
 
+func TestToggleFullscreenRoundTrip(t *testing.T) {
+	a := newTestApp()
+	pane1 := tview.NewBox()
+	pane2 := tview.NewBox()
+	a.activityFocusables = []tview.Primitive{pane1, pane2}
+	a.activityFocusableNames = []string{"pane1", "pane2"}
+	a.fullscreenContainer = tview.NewFlex()
+	a.pages.AddPage(pageFullscreen, a.fullscreenContainer, true, false)
+
+	// Focus pane2 before toggling so we verify the toggle uses the
+	// current focus index, not always pane1.
+	a.activityFocusIdx = 1
+	a.toggleFullscreen()
+	if a.currentPage != pageFullscreen {
+		t.Fatalf("expected currentPage=fullscreen, got %s", a.currentPage)
+	}
+	if a.fullscreenContainer.GetItemCount() != 1 {
+		t.Fatalf("expected 1 item in fullscreen container, got %d", a.fullscreenContainer.GetItemCount())
+	}
+	if a.fullscreenContainer.GetItem(0) != pane2 {
+		t.Errorf("expected fullscreen container to host pane2 (idx 1)")
+	}
+
+	// Toggle off — should land back on activity, container drained.
+	a.toggleFullscreen()
+	if a.currentPage != pageActivity {
+		t.Fatalf("expected currentPage=activity after exit, got %s", a.currentPage)
+	}
+	if a.fullscreenContainer.GetItemCount() != 0 {
+		t.Errorf("expected fullscreen container to be cleared on exit, got %d items", a.fullscreenContainer.GetItemCount())
+	}
+	// Focus index is preserved across the round trip so the user
+	// returns to the pane they were inspecting.
+	if a.activityFocusIdx != 1 {
+		t.Errorf("expected focus idx preserved across toggle (1), got %d", a.activityFocusIdx)
+	}
+}
+
+func TestToggleFullscreenIgnoredOnNonActivityPages(t *testing.T) {
+	a := newTestApp()
+	a.fullscreenContainer = tview.NewFlex()
+	a.pages.AddPage(pageFullscreen, a.fullscreenContainer, true, false)
+	a.activityFocusables = []tview.Primitive{tview.NewBox()}
+
+	a.currentPage = pageEscalations
+	a.toggleFullscreen()
+	if a.currentPage != pageEscalations {
+		t.Errorf("toggleFullscreen should be a no-op outside activity/fullscreen pages, got %s", a.currentPage)
+	}
+}
+
 func TestCycleActivityFocusWraps(t *testing.T) {
 	a := &App{
 		app: tview.NewApplication(),

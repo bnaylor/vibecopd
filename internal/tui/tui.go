@@ -110,6 +110,7 @@ const (
 	pageActivity     = "activity"
 	pageEscalations  = "escalations"
 	pageHelp         = "help"
+	pageFullscreen   = "fullscreen"
 	defaultPage      = pageActivity
 	refreshDebounce  = 250 * time.Millisecond
 	emptyEscalations = "[gray](no pending escalations)"
@@ -145,12 +146,20 @@ type App struct {
 	// Tab-cycle order of focusable primitives on the activity page.
 	// Tab advances through this list; Shift-Tab reverses. Only used
 	// while currentPage == pageActivity.
-	activityFocusables []tview.Primitive
-	activityFocusIdx   int
+	activityFocusables     []tview.Primitive
+	activityFocusableNames []string
+	activityFocusIdx       int
 
-	latency *latencyStats
-	events  int
-	mu      sync.Mutex
+	// Container for the currently full-screened pane. The same
+	// primitive can be referenced by both the activity layout and this
+	// container — only the visible Pages page draws, so there's no
+	// overlap conflict. Empty when no pane is full-screened.
+	fullscreenContainer *tview.Flex
+
+	latency       *latencyStats
+	events        int
+	logHasEntries bool
+	mu            sync.Mutex
 }
 
 // focusedBorder is the border color of the currently focused panel.
@@ -201,11 +210,14 @@ func (a *App) runUI() error {
 	a.headerView.SetBorder(true).SetBorderPadding(0, 0, 1, 1)
 	root.AddItem(a.headerView, 3, 0, false)
 
-	// Pages — activity, escalations, help.
+	// Pages — activity, escalations, help, plus a fullscreen overlay
+	// page that hosts whichever activity-page pane the user has expanded.
 	a.pages = tview.NewPages()
 	a.pages.AddPage(pageActivity, a.buildActivityPage(), true, true)
 	a.pages.AddPage(pageEscalations, a.buildEscalationsPage(), true, false)
 	a.pages.AddPage(pageHelp, a.buildHelpPage(), true, false)
+	a.fullscreenContainer = tview.NewFlex().SetDirection(tview.FlexRow)
+	a.pages.AddPage(pageFullscreen, a.fullscreenContainer, true, false)
 	root.AddItem(a.pages, 0, 1, true)
 
 	// Status bar (context-aware).
@@ -270,12 +282,19 @@ func (a *App) buildActivityPage() tview.Primitive {
 		AddItem(rightPanel, 0, 2, false)
 	flex.AddItem(middle, 0, 1, true)
 
+	// Log slot is 1 row, no border, no title — most days the daemon is
+	// silent here (only startup + actual errors emit log events) so a
+	// 7-row bordered panel was wasted real estate. The full history is
+	// still kept in logView; press `f` while it's focused to expand to
+	// fullscreen and read everything.
 	a.logView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft).
-		SetScrollable(true)
-	a.logView.SetTitle("log").SetBorder(true)
-	flex.AddItem(a.logView, 7, 0, false)
+		SetScrollable(true).
+		SetWrap(false)
+	a.logView.SetBorder(false)
+	a.logView.SetText("[gray]log: idle  ([white]f[gray] to expand)[white]")
+	flex.AddItem(a.logView, 1, 0, false)
 
 	// Cycle order: list first (most-used), then sidebar top-to-bottom,
 	// then log. Yellow border highlights the focused panel.
@@ -285,6 +304,7 @@ func (a *App) buildActivityPage() tview.Primitive {
 		a.configView,
 		a.logView,
 	}
+	a.activityFocusableNames = []string{"activity", "latency", "config", "log"}
 	a.wireFocusHighlight(a.activity.Box)
 	a.wireFocusHighlight(a.latencyView.Box)
 	a.wireFocusHighlight(a.configView.Box)
@@ -350,6 +370,7 @@ func helpText() string {
 		"  [yellow]Activity page[white]",
 		"    [white]Tab[gray] / [white]Shift-Tab[gray]  cycle focus across panes (yellow border)",
 		"    [white]↑/↓[gray]          scroll within focused pane",
+		"    [white]f[gray]            expand focused pane to fullscreen ([white]Esc[gray] / [white]f[gray] to collapse)",
 		"    [white]r[gray]            refresh config",
 		"",
 		"  [yellow]Escalations page[white]",
@@ -383,6 +404,14 @@ func (a *App) globalInput(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		a.switchTo(pageEscalations)
 		return nil
+	case 'f':
+		// `f` only meaningful from the activity page (entering fullscreen)
+		// or from fullscreen itself (exiting). Other pages already fill
+		// the available space.
+		if a.currentPage == pageActivity || a.currentPage == pageFullscreen {
+			a.toggleFullscreen()
+			return nil
+		}
 	case 'r':
 		if a.currentPage == pageActivity {
 			a.refreshConfig()
@@ -399,6 +428,9 @@ func (a *App) globalInput(event *tcell.EventKey) *tcell.EventKey {
 		switch a.currentPage {
 		case pageEscalations, pageHelp:
 			a.switchTo(pageActivity)
+			return nil
+		case pageFullscreen:
+			a.toggleFullscreen()
 			return nil
 		}
 	}
@@ -431,6 +463,37 @@ func (a *App) cycleActivityFocus(step int) {
 	a.app.SetFocus(a.activityFocusables[a.activityFocusIdx])
 }
 
+// toggleFullscreen swaps the focused activity-page pane between its
+// embedded slot and a dedicated fullscreen page. The same primitive is
+// referenced by both the activity Flex and the fullscreen container —
+// safe because Pages only draws the visible page, so there's never a
+// layout collision. On exit, the primitive lives back in its embedded
+// slot and the activity Flex re-lays it out via SetRect on next draw.
+func (a *App) toggleFullscreen() {
+	if a.currentPage == pageFullscreen {
+		// Exit fullscreen: clear the container so the embedded copy is
+		// the only place the primitive renders, then return to activity.
+		a.fullscreenContainer.Clear()
+		a.currentPage = pageActivity
+		a.pages.SwitchToPage(pageActivity)
+		if len(a.activityFocusables) > 0 {
+			a.app.SetFocus(a.activityFocusables[a.activityFocusIdx])
+		}
+		a.updateStatusBar()
+		return
+	}
+
+	if a.currentPage != pageActivity || len(a.activityFocusables) == 0 {
+		return
+	}
+	pane := a.activityFocusables[a.activityFocusIdx]
+	a.fullscreenContainer.Clear()
+	a.fullscreenContainer.AddItem(pane, 0, 1, true)
+	a.currentPage = pageFullscreen
+	a.pages.SwitchToPage(pageFullscreen)
+	a.updateStatusBar()
+}
+
 // escalationsInput handles keys when the escalations List is focused.
 // The List itself absorbs ↑/↓; we intercept `a` and `d` for verdicts
 // and let everything else fall through to globalInput.
@@ -461,10 +524,13 @@ func (a *App) switchTo(name string) {
 		a.requestEscalationRefresh(true)
 	}
 	if name == pageActivity {
-		// Pages.SwitchToPage delegates focus through the activity Flex
-		// to the activity List; align our cursor so subsequent Tabs
-		// advance from there rather than from a stale index.
+		// Reset the focus cursor so a fresh visit starts at the activity
+		// List rather than at whichever pane the user was last on. Then
+		// align tview's actual focus to match the cursor.
 		a.activityFocusIdx = 0
+		if len(a.activityFocusables) > 0 {
+			a.app.SetFocus(a.activityFocusables[0])
+		}
 	}
 	a.updateStatusBar()
 }
@@ -490,18 +556,28 @@ func (a *App) updateStatusBar() {
 	var hint string
 	switch a.currentPage {
 	case pageActivity:
-		hint = "[white]q[gray]:quit  [white]e[gray]:escalations  [white]Tab[gray]:next pane  [white]↑/↓[gray]:scroll  [white]r[gray]:refresh config"
+		hint = "[white]q[gray]:quit  [white]e[gray]:escalations  [white]Tab[gray]:next pane  [white]↑/↓[gray]:scroll  [white]f[gray]:fullscreen  [white]r[gray]:refresh config"
 	case pageEscalations:
 		hint = "[white]q[gray]:quit  [white]a[gray]:approve  [white]d[gray]:deny  [white]R[gray]:refresh  [white]Esc[gray]:back"
 	case pageHelp:
 		hint = "[gray]press any key to close help"
+	case pageFullscreen:
+		hint = "[white]q[gray]:quit  [white]Esc[gray] / [white]f[gray]:collapse"
 	default:
 		hint = "[white]q[gray]:quit"
 	}
 	if a.statusBar == nil {
 		return
 	}
-	a.statusBar.SetText(fmt.Sprintf("[yellow]%s[gray]   %s   [white]?[gray]:help", a.currentPage, hint))
+	label := a.currentPage
+	if a.currentPage == pageFullscreen {
+		// Show which pane is being viewed so the label is informative
+		// rather than just "fullscreen".
+		if a.activityFocusIdx < len(a.activityFocusableNames) {
+			label = fmt.Sprintf("fullscreen: %s", a.activityFocusableNames[a.activityFocusIdx])
+		}
+	}
+	a.statusBar.SetText(fmt.Sprintf("[yellow]%s[gray]   %s   [white]?[gray]:help", label, hint))
 }
 
 func (a *App) readEvents() {
@@ -583,12 +659,22 @@ func (a *App) addLogLine(evt daemon.Event) {
 	line := fmt.Sprintf("[%s]%s[white] [gray]%s[white] %s", levelColor, strings.ToUpper(evt.Level), ts, evt.Message)
 
 	a.app.QueueUpdateDraw(func() {
+		// First real log entry replaces the "log: idle" placeholder so
+		// it doesn't sit at the top of the scrollback forever.
+		if !a.logHasEntries {
+			a.logView.SetText("")
+			a.logHasEntries = true
+		}
 		fmt.Fprintln(a.logView, line)
 		text := a.logView.GetText(true)
 		lineSlice := strings.Split(text, "\n")
 		if len(lineSlice) > maxLogLines+1 {
 			a.logView.SetText(strings.Join(lineSlice[len(lineSlice)-maxLogLines-1:], "\n"))
 		}
+		// In the embedded 1-line slot we want the latest line visible
+		// without manual scrolling. ScrollToEnd is a no-op when the
+		// view is full-screened and the user has scrolled up.
+		a.logView.ScrollToEnd()
 	})
 }
 
