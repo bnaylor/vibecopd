@@ -240,8 +240,17 @@ func TestEditConfigSymlinkResolution(t *testing.T) {
 	defer os.Remove(tmp)
 
 	// The temp file must land next to the real file, not the symlink.
-	if filepath.Dir(tmp) != realDir {
-		t.Errorf("temp file should be in real dir %q; got %q", realDir, filepath.Dir(tmp))
+	// Resolve realDir's own symlinks so the comparison works on macOS,
+	// where t.TempDir() returns a /var/... path that is itself a
+	// symlink to /private/var/... — without this, livePath comes back
+	// under /private/var while realDir was captured as /var, and the
+	// equality check fails on a healthy fix.
+	expectedDir, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(tmp) != expectedDir {
+		t.Errorf("temp file should be in real dir %q; got %q", expectedDir, filepath.Dir(tmp))
 	}
 }
 
