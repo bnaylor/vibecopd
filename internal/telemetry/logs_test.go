@@ -43,6 +43,36 @@ func TestEventToLogRecordVerdict(t *testing.T) {
 	}
 }
 
+func TestEventToLogRecordHarnessAndHookEvent(t *testing.T) {
+	evt := daemon.Event{
+		Verdict:   "deny",
+		Reason:    "blocked",
+		Harness:   "claude",
+		HookEvent: "PreToolUse",
+	}
+	rec := EventToLogRecord(evt)
+	got := collectAttrs(rec)
+
+	if got["vibecop.harness"] != "claude" {
+		t.Errorf("vibecop.harness: got %q, want %q", got["vibecop.harness"], "claude")
+	}
+	if got["vibecop.hook_event"] != "PreToolUse" {
+		t.Errorf("vibecop.hook_event: got %q, want %q", got["vibecop.hook_event"], "PreToolUse")
+	}
+}
+
+func TestEventToLogRecordEmptyHarnessDropped(t *testing.T) {
+	evt := daemon.Event{Verdict: "approve"}
+	rec := EventToLogRecord(evt)
+	got := collectAttrs(rec)
+	if _, present := got["vibecop.harness"]; present {
+		t.Errorf("vibecop.harness must be dropped when empty, got %q", got["vibecop.harness"])
+	}
+	if _, present := got["vibecop.hook_event"]; present {
+		t.Errorf("vibecop.hook_event must be dropped when empty, got %q", got["vibecop.hook_event"])
+	}
+}
+
 func TestEventToLogRecordSeverity(t *testing.T) {
 	cases := []struct {
 		name string

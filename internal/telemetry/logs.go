@@ -80,6 +80,8 @@ func EventToLogRecord(evt daemon.Event) otellog.Record {
 	// the local audit log (~/.vibecop/audit/<project>/).
 	addStr("vibecop.verdict", evt.Verdict)
 	addStr("vibecop.reason", evt.Reason)
+	addStr("vibecop.harness", evt.Harness)
+	addStr("vibecop.hook_event", evt.HookEvent)
 	if evt.LatencyMs != 0 {
 		rec.AddAttributes(otellog.Int64("vibecop.latency_ms", evt.LatencyMs))
 	}
