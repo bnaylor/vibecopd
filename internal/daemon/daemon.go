@@ -23,6 +23,7 @@ const (
 	TypeTUISubscribe      = "tui_subscribe"
 	TypeListPending       = "list_pending"
 	TypeCompletePending   = "complete_pending"
+	TypeGetConfig         = "get_config"
 )
 
 // Request from a hook or TUI client.
@@ -73,6 +74,17 @@ type CompleteResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ConfigResponse is returned for get_config. Mirrors the subset of
+// daemon/model config the TUI displays. Excludes secrets (api_key) by
+// construction — the TUI must never need them.
+type ConfigResponse struct {
+	Endpoint     string `json:"endpoint"`
+	APIFormat    string `json:"api_format"`
+	Model        string `json:"model"`
+	TimeoutMs    int    `json:"timeout_ms"`
+	AuditEnabled bool   `json:"audit_enabled"`
+}
+
 // Event streamed to TUI subscribers.
 type Event struct {
 	Tool      string `json:"tool,omitempty"`
@@ -99,6 +111,10 @@ type listPendingHandler func() (entries []PendingEntry, auditEnabled bool)
 // and finalises the record. Returns an error message (empty on success).
 type completePendingHandler func(projectHash, key, humanDecision string) error
 
+// getConfigHandler is called when a get_config request arrives. Returns
+// the daemon's effective config snapshot for display in the TUI.
+type getConfigHandler func() ConfigResponse
+
 // Daemon is the UDS-based IPC server.
 type Daemon struct {
 	socketPath  string
@@ -111,6 +127,7 @@ type Daemon struct {
 	onPerm      permissionHandler
 	onList      listPendingHandler
 	onComplete  completePendingHandler
+	onGetConfig getConfigHandler
 	wg          sync.WaitGroup
 	quit        chan struct{}
 	stopOnce    sync.Once
@@ -139,6 +156,10 @@ func (d *Daemon) OnListPending(h listPendingHandler) { d.onList = h }
 // OnCompletePending registers the handler for complete_pending messages.
 // Optional — when nil, complete_pending requests respond with an error.
 func (d *Daemon) OnCompletePending(h completePendingHandler) { d.onComplete = h }
+
+// OnGetConfig registers the handler for get_config messages. Optional —
+// when nil, get_config requests get a zero-valued response.
+func (d *Daemon) OnGetConfig(h getConfigHandler) { d.onGetConfig = h }
 
 // RegisterOTLPSubscriber returns a buffered channel that receives every
 // daemon event for OTLP export. Peers with TUI subscribers in
@@ -319,6 +340,8 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		handleListPending(conn, d.onList)
 	case TypeCompletePending:
 		handleCompletePending(conn, req, d.onComplete)
+	case TypeGetConfig:
+		handleGetConfig(conn, d.onGetConfig)
 	default:
 		log.Printf("daemon: unknown request type: %s", req.Type)
 		json.NewEncoder(conn).Encode(Verdict{
@@ -335,6 +358,14 @@ func handleListPending(conn net.Conn, h listPendingHandler) {
 	}
 	if resp.Pending == nil {
 		resp.Pending = []PendingEntry{}
+	}
+	json.NewEncoder(conn).Encode(resp)
+}
+
+func handleGetConfig(conn net.Conn, h getConfigHandler) {
+	var resp ConfigResponse
+	if h != nil {
+		resp = h()
 	}
 	json.NewEncoder(conn).Encode(resp)
 }

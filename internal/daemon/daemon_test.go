@@ -448,3 +448,59 @@ func TestCompletePendingNoHandler(t *testing.T) {
 		t.Error("expected OK=false when no handler is registered")
 	}
 }
+
+func TestGetConfigRoundTrip(t *testing.T) {
+	dir := shortTempDir(t)
+	socketPath := filepath.Join(dir, "d.sock")
+	cfg := config.DefaultConfig()
+	d := New(socketPath, cfg)
+	d.OnGetConfig(func() ConfigResponse {
+		return ConfigResponse{
+			Endpoint:     "https://example.com/v1/chat",
+			APIFormat:    "openai",
+			Model:        "test-model",
+			TimeoutMs:    5000,
+			AuditEnabled: true,
+		}
+	})
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop()
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	json.NewEncoder(conn).Encode(Request{Type: TypeGetConfig})
+	var resp ConfigResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Endpoint != "https://example.com/v1/chat" || resp.Model != "test-model" || resp.TimeoutMs != 5000 || !resp.AuditEnabled {
+		t.Errorf("config did not round-trip: %+v", resp)
+	}
+}
+
+func TestGetConfigNoHandler(t *testing.T) {
+	d, socketPath := newTestDaemon(t)
+	defer d.Stop()
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	json.NewEncoder(conn).Encode(Request{Type: TypeGetConfig})
+	var resp ConfigResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	// Zero-value response is acceptable when no handler is registered.
+	if resp.Endpoint != "" || resp.Model != "" || resp.TimeoutMs != 0 || resp.AuditEnabled {
+		t.Errorf("expected zero-valued response, got %+v", resp)
+	}
+}

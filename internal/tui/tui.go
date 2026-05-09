@@ -209,6 +209,12 @@ func (a *App) runUI() error {
 	// Start reading events in background.
 	go a.readEvents()
 
+	// Initial config fetch. Runs in a goroutine so it doesn't race the
+	// app loop startup; QueueUpdateDraw is buffered, so the goroutine's
+	// first SetText queues against the loop without blocking even if it
+	// finishes before Run() begins draining updates.
+	go a.fetchAndRenderConfig()
+
 	a.app.SetRoot(root, true)
 	return a.app.Run()
 }
@@ -541,10 +547,50 @@ func (a *App) updateHeader(_ daemon.Event) {
 	})
 }
 
-// refreshConfig runs on the tview main goroutine (input handler). Same
-// deadlock rule as switchTo — set the primitive directly.
+// refreshConfig runs on the tview main goroutine (input handler). The
+// actual fetch must happen on a goroutine to avoid the deadlock that
+// killed the original implementation: synchronous QueueUpdateDraw from
+// inside an input handler waits for the main loop to drain the update
+// channel, but the main loop is busy executing the handler. We set
+// in-flight feedback directly here, then dispatch the network round
+// trip onto a goroutine where QueueUpdateDraw is safe.
 func (a *App) refreshConfig() {
-	a.configView.SetText("(press r to refresh from daemon)")
+	a.configView.SetText("[gray]refreshing...[white]")
+	go a.fetchAndRenderConfig()
+}
+
+// fetchAndRenderConfig dials the daemon for a config snapshot and
+// updates the config panel. Safe to call from any goroutine — uses
+// QueueUpdateDraw for the view mutation. Used both for the initial
+// startup populate and for the `r` keystroke refresh.
+func (a *App) fetchAndRenderConfig() {
+	cfg, err := a.fetchConfig()
+	if err != nil {
+		a.app.QueueUpdateDraw(func() {
+			a.configView.SetText(fmt.Sprintf("[red]get_config failed: %v[white]", err))
+		})
+		return
+	}
+	a.UpdateConfig(cfg.Endpoint, cfg.APIFormat, cfg.Model, cfg.TimeoutMs, cfg.AuditEnabled)
+}
+
+// fetchConfig issues get_config and returns the daemon's effective
+// config snapshot. Mirrors fetchPending — fresh short-lived UDS dial.
+func (a *App) fetchConfig() (daemon.ConfigResponse, error) {
+	conn, err := a.dialDaemon()
+	if err != nil {
+		return daemon.ConfigResponse{}, err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(daemon.Request{Type: daemon.TypeGetConfig}); err != nil {
+		return daemon.ConfigResponse{}, err
+	}
+	var resp daemon.ConfigResponse
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return daemon.ConfigResponse{}, err
+	}
+	return resp, nil
 }
 
 // UpdateConfig is called externally (or on timer) to refresh the config display.

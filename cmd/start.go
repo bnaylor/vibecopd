@@ -67,6 +67,15 @@ var startCmd = &cobra.Command{
 		d.OnPermission(makePermissionHandler(ec, d, tp, cfg.Daemon.ActivityWindow, cfg.Daemon.AuditEnabled, cfg.Model.Model, cfg.Model.APIFormat, stores, loggers, &storesMu))
 		d.OnListPending(makeListPendingHandler(loggers, &storesMu, cfg.Daemon.AuditEnabled))
 		d.OnCompletePending(makeCompletePendingHandler(loggers, &storesMu))
+		d.OnGetConfig(func() daemon.ConfigResponse {
+			return daemon.ConfigResponse{
+				Endpoint:     cfg.Model.Endpoint,
+				APIFormat:    cfg.Model.APIFormat,
+				Model:        cfg.Model.Model,
+				TimeoutMs:    cfg.Daemon.TimeoutMs,
+				AuditEnabled: cfg.Daemon.AuditEnabled,
+			}
+		})
 
 		// Subscribe telemetry log exporter to daemon events. Returns a
 		// WaitGroup we drain after d.Run so logs flush before SDK shutdown.

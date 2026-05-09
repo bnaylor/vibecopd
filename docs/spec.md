@@ -156,6 +156,12 @@ Single Unix Domain Socket. Messages are newline-terminated JSON objects. Each co
 
 After subscribing, the daemon streams newline-terminated event objects to the TUI connection for the duration of the session.
 
+**TUI ad-hoc requests** (each on a fresh short-lived connection, mirroring the hook pattern):
+
+- `{ "type": "list_pending" }` → `{ "pending": [...], "audit_enabled": bool }` — snapshot of in-memory pending audit records (see *Escalations page*).
+- `{ "type": "complete_pending", "key": "...", "project_hash": "...", "human_decision": "approved" | "blocked" }` → `{ "ok": bool, "error": "..." }` — finalises the audit record routed by `project_hash`.
+- `{ "type": "get_config" }` → `{ "endpoint": "...", "api_format": "...", "model": "...", "timeout_ms": N, "audit_enabled": bool }` — daemon's effective config snapshot for the TUI's config panel. Excludes the API key by construction.
+
 ### Hook scripts
 
 `vibecop install` writes thin wrapper scripts that delegate entirely to `vibecop hook`:
