@@ -147,10 +147,37 @@ func TestHelpTextSections(t *testing.T) {
 			t.Errorf("help text missing section %q", section)
 		}
 	}
-	for _, key := range []string{"q", "?", "e", "a", "d"} {
+	for _, key := range []string{"q", "?", "e", "a", "d", "Tab"} {
 		if !strings.Contains(got, "[white]"+key+"[gray]") {
 			t.Errorf("help text missing key %q", key)
 		}
+	}
+}
+
+func TestCycleActivityFocusWraps(t *testing.T) {
+	a := &App{
+		app: tview.NewApplication(),
+		activityFocusables: []tview.Primitive{
+			tview.NewBox(),
+			tview.NewBox(),
+			tview.NewBox(),
+		},
+	}
+	if a.activityFocusIdx != 0 {
+		t.Fatalf("expected initial idx 0, got %d", a.activityFocusIdx)
+	}
+	a.cycleActivityFocus(+1)
+	if a.activityFocusIdx != 1 {
+		t.Errorf("after +1, expected idx 1, got %d", a.activityFocusIdx)
+	}
+	a.cycleActivityFocus(+1)
+	a.cycleActivityFocus(+1)
+	if a.activityFocusIdx != 0 {
+		t.Errorf("expected wrap to 0 after 3 forward steps, got %d", a.activityFocusIdx)
+	}
+	a.cycleActivityFocus(-1)
+	if a.activityFocusIdx != 2 {
+		t.Errorf("expected wrap to 2 after backward step, got %d", a.activityFocusIdx)
 	}
 }
 

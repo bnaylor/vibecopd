@@ -142,10 +142,24 @@ type App struct {
 	lastRefresh time.Time
 	refreshing  bool
 
+	// Tab-cycle order of focusable primitives on the activity page.
+	// Tab advances through this list; Shift-Tab reverses. Only used
+	// while currentPage == pageActivity.
+	activityFocusables []tview.Primitive
+	activityFocusIdx   int
+
 	latency *latencyStats
 	events  int
 	mu      sync.Mutex
 }
+
+// focusedBorder is the border color of the currently focused panel.
+// blurredBorder is the default. Wired via SetFocusFunc / SetBlurFunc on
+// each focusable primitive in buildActivityPage.
+var (
+	focusedBorder = tcell.ColorYellow
+	blurredBorder = tcell.ColorWhite
+)
 
 // Run connects to the daemon and starts the TUI. Blocks until the user quits.
 func Run(socketPath string) error {
@@ -226,14 +240,18 @@ func (a *App) buildActivityPage() tview.Primitive {
 
 	a.latencyView = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
+		SetTextAlign(tview.AlignLeft).
+		SetScrollable(true)
 	a.latencyView.SetTitle("latency").SetBorder(true)
 	a.latencyView.SetText("waiting for data...")
 	rightPanel.AddItem(a.latencyView, 0, 1, false)
 
 	a.configView = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
+		SetTextAlign(tview.AlignLeft).
+		SetScrollable(true).
+		SetWrap(true).
+		SetWordWrap(true)
 	a.configView.SetTitle("config").SetBorder(true)
 	a.configView.SetText("waiting for data...")
 	rightPanel.AddItem(a.configView, 0, 1, false)
@@ -259,7 +277,33 @@ func (a *App) buildActivityPage() tview.Primitive {
 	a.logView.SetTitle("log").SetBorder(true)
 	flex.AddItem(a.logView, 7, 0, false)
 
+	// Cycle order: list first (most-used), then sidebar top-to-bottom,
+	// then log. Yellow border highlights the focused panel.
+	a.activityFocusables = []tview.Primitive{
+		a.activity,
+		a.latencyView,
+		a.configView,
+		a.logView,
+	}
+	a.wireFocusHighlight(a.activity.Box)
+	a.wireFocusHighlight(a.latencyView.Box)
+	a.wireFocusHighlight(a.configView.Box)
+	a.wireFocusHighlight(a.logView.Box)
+
 	return flex
+}
+
+// wireFocusHighlight installs focus/blur callbacks that color the
+// border yellow on focus and white on blur. The Box is what owns the
+// border — for List/TextView we grab the embedded *Box to register
+// callbacks via SetFocusFunc / SetBlurFunc.
+func (a *App) wireFocusHighlight(box *tview.Box) {
+	box.SetFocusFunc(func() {
+		box.SetBorderColor(focusedBorder)
+		a.updateStatusBar()
+	}).SetBlurFunc(func() {
+		box.SetBorderColor(blurredBorder)
+	})
 }
 
 func (a *App) buildEscalationsPage() tview.Primitive {
@@ -304,7 +348,8 @@ func helpText() string {
 		"    [white]Esc[gray]          back to activity",
 		"",
 		"  [yellow]Activity page[white]",
-		"    [white]↑/↓[gray]          scroll activity",
+		"    [white]Tab[gray] / [white]Shift-Tab[gray]  cycle focus across panes (yellow border)",
+		"    [white]↑/↓[gray]          scroll within focused pane",
 		"    [white]r[gray]            refresh config",
 		"",
 		"  [yellow]Escalations page[white]",
@@ -357,7 +402,33 @@ func (a *App) globalInput(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 	}
+
+	// Tab / Shift-Tab: cycle focus between activity-page panels. Only
+	// active on the activity page — other pages have at most one
+	// focusable primitive so cycling is a no-op there.
+	if a.currentPage == pageActivity && len(a.activityFocusables) > 0 {
+		switch event.Key() {
+		case tcell.KeyTab:
+			a.cycleActivityFocus(+1)
+			return nil
+		case tcell.KeyBacktab:
+			a.cycleActivityFocus(-1)
+			return nil
+		}
+	}
 	return event
+}
+
+// cycleActivityFocus advances the focused panel on the activity page by
+// `step` (+1 for Tab, -1 for Shift-Tab). The focus/blur callbacks wired
+// in buildActivityPage repaint the borders and refresh the status bar.
+func (a *App) cycleActivityFocus(step int) {
+	n := len(a.activityFocusables)
+	if n == 0 {
+		return
+	}
+	a.activityFocusIdx = (a.activityFocusIdx + step + n) % n
+	a.app.SetFocus(a.activityFocusables[a.activityFocusIdx])
 }
 
 // escalationsInput handles keys when the escalations List is focused.
@@ -389,6 +460,12 @@ func (a *App) switchTo(name string) {
 	if name == pageEscalations {
 		a.requestEscalationRefresh(true)
 	}
+	if name == pageActivity {
+		// Pages.SwitchToPage delegates focus through the activity Flex
+		// to the activity List; align our cursor so subsequent Tabs
+		// advance from there rather than from a stale index.
+		a.activityFocusIdx = 0
+	}
 	a.updateStatusBar()
 }
 
@@ -413,7 +490,7 @@ func (a *App) updateStatusBar() {
 	var hint string
 	switch a.currentPage {
 	case pageActivity:
-		hint = "[white]q[gray]:quit  [white]e[gray]:escalations  [white]↑/↓[gray]:scroll  [white]r[gray]:refresh config"
+		hint = "[white]q[gray]:quit  [white]e[gray]:escalations  [white]Tab[gray]:next pane  [white]↑/↓[gray]:scroll  [white]r[gray]:refresh config"
 	case pageEscalations:
 		hint = "[white]q[gray]:quit  [white]a[gray]:approve  [white]d[gray]:deny  [white]R[gray]:refresh  [white]Esc[gray]:back"
 	case pageHelp:

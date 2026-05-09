@@ -226,7 +226,7 @@ The TUI is organised as a `tview.Pages` tree with three pages — **activity** (
 Keyboard:
 
 - Global: `q` quit, `?` / `h` toggle help, `e` switch to escalations, `Esc` back to activity.
-- Activity: `↑/↓` scroll, `r` refresh config.
+- Activity: `Tab` / `Shift-Tab` cycle focus across panes (activity → latency → config → log → activity); the focused pane has a yellow border. `↑/↓` scrolls within the focused pane. `r` refreshes the config pane from the daemon.
 - Escalations: `↑/↓` scroll, `a` approve (audit), `d` deny (audit), `R` refresh queue.
 
 The escalation queue model is **non-blocking** by design: the daemon does not hold the hook connection open while a human decides. Holding open would invert the fail-open invariant (an absent operator stalls the agent indefinitely) and conflict with the harness's own PreToolUse timeout. A blocking-hold variant could be added later as an opt-in mode.
