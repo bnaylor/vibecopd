@@ -200,21 +200,15 @@ func installClaudeHooks(vibecopPath string) error {
 	}
 
 	raw := readRawJSON(path)
-
-	// Parse existing hooks from the raw map.
-	var hooks claudeHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
+	hooksMap := rawHooksMap(raw)
+	entries := unmarshalHookEntries[claudePreToolEntry](hooksMap["PreToolUse"])
 
 	want := hookCommand(vibecopPath)
 
 	// Walk existing entries: if there's already a vibecop hook, update its
 	// command in place (idempotent on equal paths, replace on differing
 	// ones) instead of appending a duplicate.
-	for i, e := range hooks.PreToolUse {
+	for i, e := range entries {
 		if len(e.Hooks) == 0 {
 			continue
 		}
@@ -224,16 +218,18 @@ func installClaudeHooks(vibecopPath string) error {
 		if e.Hooks[0].Command == want {
 			return nil
 		}
-		hooks.PreToolUse[i].Hooks[0].Command = want
-		raw["hooks"] = hooks
+		entries[i].Hooks[0].Command = want
+		hooksMap["PreToolUse"] = entries
+		raw["hooks"] = hooksMap
 		return writeRawJSON(path, raw)
 	}
 
-	hooks.PreToolUse = append(hooks.PreToolUse, claudePreToolEntry{
+	entries = append(entries, claudePreToolEntry{
 		Matcher: "",
 		Hooks:   []claudeHook{{Type: "command", Command: want}},
 	})
-	raw["hooks"] = hooks
+	hooksMap["PreToolUse"] = entries
+	raw["hooks"] = hooksMap
 	return writeRawJSON(path, raw)
 }
 
@@ -248,23 +244,16 @@ func installGeminiHooks(vibecopPath string) error {
 	}
 
 	raw := readRawJSON(path)
-
-	var hooks geminiHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
+	hooksMap := rawHooksMap(raw)
 
 	// Drop legacy snake_case before_tool key from older vibecop installs so
 	// uninstalling it on upgrade is automatic.
-	if rawHooks, ok := raw["hooks"].(map[string]any); ok {
-		delete(rawHooks, "before_tool")
-		raw["hooks"] = rawHooks
-	}
+	delete(hooksMap, "before_tool")
+
+	entries := unmarshalHookEntries[geminiEntry](hooksMap["BeforeTool"])
 
 	want := hookCommand(vibecopPath)
-	for i, e := range hooks.BeforeTool {
+	for i, e := range entries {
 		if len(e.Hooks) == 0 {
 			continue
 		}
@@ -274,15 +263,17 @@ func installGeminiHooks(vibecopPath string) error {
 		if e.Hooks[0].Command == want {
 			return nil
 		}
-		hooks.BeforeTool[i].Hooks[0].Command = want
-		raw["hooks"] = hooks
+		entries[i].Hooks[0].Command = want
+		hooksMap["BeforeTool"] = entries
+		raw["hooks"] = hooksMap
 		return writeRawJSON(path, raw)
 	}
 
-	hooks.BeforeTool = append(hooks.BeforeTool, geminiEntry{
+	entries = append(entries, geminiEntry{
 		Hooks: []geminiHook{{Type: "command", Command: want}},
 	})
-	raw["hooks"] = hooks
+	hooksMap["BeforeTool"] = entries
+	raw["hooks"] = hooksMap
 	return writeRawJSON(path, raw)
 }
 
@@ -313,27 +304,27 @@ func uninstallClaudeHooks() error {
 	}
 
 	raw := readRawJSON(path)
+	hooksMap := rawHooksMap(raw)
+	entries := unmarshalHookEntries[claudePreToolEntry](hooksMap["PreToolUse"])
 
-	var hooks claudeHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
-
-	filtered := slices.DeleteFunc(hooks.PreToolUse, func(e claudePreToolEntry) bool {
+	filtered := slices.DeleteFunc(entries, func(e claudePreToolEntry) bool {
 		return len(e.Hooks) > 0 && isVibecopHookCommand(e.Hooks[0].Command)
 	})
 
-	if len(filtered) == len(hooks.PreToolUse) {
+	if len(filtered) == len(entries) {
 		return nil
 	}
 
 	if len(filtered) == 0 {
+		delete(hooksMap, "PreToolUse")
+	} else {
+		hooksMap["PreToolUse"] = filtered
+	}
+
+	if len(hooksMap) == 0 {
 		delete(raw, "hooks")
 	} else {
-		hooks.PreToolUse = filtered
-		raw["hooks"] = hooks
+		raw["hooks"] = hooksMap
 	}
 
 	return writeRawJSON(path, raw)
@@ -350,29 +341,27 @@ func uninstallGeminiHooks() error {
 	}
 
 	raw := readRawJSON(path)
+	hooksMap := rawHooksMap(raw)
 
 	// Strip legacy snake_case before_tool key (pre-VCOP-13 install shape) so
 	// the upgrade path leaves a clean settings file.
-	if rawHooks, ok := raw["hooks"].(map[string]any); ok {
-		delete(rawHooks, "before_tool")
-		raw["hooks"] = rawHooks
-	}
+	delete(hooksMap, "before_tool")
 
-	var hooks geminiHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
-
-	hooks.BeforeTool = slices.DeleteFunc(hooks.BeforeTool, func(e geminiEntry) bool {
+	entries := unmarshalHookEntries[geminiEntry](hooksMap["BeforeTool"])
+	filtered := slices.DeleteFunc(entries, func(e geminiEntry) bool {
 		return len(e.Hooks) > 0 && isVibecopHookCommand(e.Hooks[0].Command)
 	})
 
-	if len(hooks.BeforeTool) == 0 {
+	if len(filtered) == 0 {
+		delete(hooksMap, "BeforeTool")
+	} else {
+		hooksMap["BeforeTool"] = filtered
+	}
+
+	if len(hooksMap) == 0 {
 		delete(raw, "hooks")
 	} else {
-		raw["hooks"] = hooks
+		raw["hooks"] = hooksMap
 	}
 	return writeRawJSON(path, raw)
 }
@@ -387,24 +376,21 @@ func installCodexHooks(vibecopPath string) error {
 	}
 
 	raw := readRawJSON(path)
+	hooksMap := rawHooksMap(raw)
 
-	var hooks codexHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
+	preEntries := unmarshalHookEntries[codexEntry](hooksMap["PreToolUse"])
+	permEntries := unmarshalHookEntries[codexEntry](hooksMap["PermissionRequest"])
 
 	want := hookCommand(vibecopPath)
 
-	preEntries, changedPre := upsertCodexEntry(hooks.PreToolUse, want)
-	permEntries, changedPerm := upsertCodexEntry(hooks.PermissionRequest, want)
+	updatedPre, changedPre := upsertCodexEntry(preEntries, want)
+	updatedPerm, changedPerm := upsertCodexEntry(permEntries, want)
 	if !changedPre && !changedPerm {
 		return nil
 	}
-	hooks.PreToolUse = preEntries
-	hooks.PermissionRequest = permEntries
-	raw["hooks"] = hooks
+	hooksMap["PreToolUse"] = updatedPre
+	hooksMap["PermissionRequest"] = updatedPerm
+	raw["hooks"] = hooksMap
 	return writeRawJSON(path, raw)
 }
 
@@ -448,21 +434,17 @@ func installCopilotHooks(vibecopPath string) error {
 		raw["version"] = 1
 	}
 
-	var hooks copilotHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
+	hooksMap := rawHooksMap(raw)
+	entries := unmarshalHookEntries[copilotHook](hooksMap["preToolUse"])
 
 	want := hookCommand(vibecopPath)
 
-	updated, changed := upsertCopilotEntry(hooks.PreToolUse, want)
+	updated, changed := upsertCopilotEntry(entries, want)
 	if !changed {
 		return nil
 	}
-	hooks.PreToolUse = updated
-	raw["hooks"] = hooks
+	hooksMap["preToolUse"] = updated
+	raw["hooks"] = hooksMap
 	return writeRawJSON(path, raw)
 }
 
@@ -490,21 +472,29 @@ func uninstallCodexHooks() error {
 	}
 
 	raw := readRawJSON(path)
+	hooksMap := rawHooksMap(raw)
 
-	var hooks codexHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
+	preEntries := unmarshalHookEntries[codexEntry](hooksMap["PreToolUse"])
+	permEntries := unmarshalHookEntries[codexEntry](hooksMap["PermissionRequest"])
+
+	filteredPre := removeVibecopCodexEntries(preEntries)
+	filteredPerm := removeVibecopCodexEntries(permEntries)
+
+	if len(filteredPre) == 0 {
+		delete(hooksMap, "PreToolUse")
+	} else {
+		hooksMap["PreToolUse"] = filteredPre
+	}
+	if len(filteredPerm) == 0 {
+		delete(hooksMap, "PermissionRequest")
+	} else {
+		hooksMap["PermissionRequest"] = filteredPerm
 	}
 
-	hooks.PreToolUse = removeVibecopCodexEntries(hooks.PreToolUse)
-	hooks.PermissionRequest = removeVibecopCodexEntries(hooks.PermissionRequest)
-
-	if len(hooks.PreToolUse) == 0 && len(hooks.PermissionRequest) == 0 {
+	if len(hooksMap) == 0 {
 		delete(raw, "hooks")
 	} else {
-		raw["hooks"] = hooks
+		raw["hooks"] = hooksMap
 	}
 	return writeRawJSON(path, raw)
 }
@@ -525,22 +515,23 @@ func uninstallCopilotHooks() error {
 	}
 
 	raw := readRawJSON(path)
+	hooksMap := rawHooksMap(raw)
+	entries := unmarshalHookEntries[copilotHook](hooksMap["preToolUse"])
 
-	var hooks copilotHooks
-	if raw["hooks"] != nil {
-		if b, err := json.Marshal(raw["hooks"]); err == nil {
-			json.Unmarshal(b, &hooks) //nolint:errcheck
-		}
-	}
-
-	hooks.PreToolUse = slices.DeleteFunc(hooks.PreToolUse, func(h copilotHook) bool {
+	filtered := slices.DeleteFunc(entries, func(h copilotHook) bool {
 		return isVibecopHookCommand(h.Bash)
 	})
 
-	if len(hooks.PreToolUse) == 0 {
+	if len(filtered) == 0 {
+		delete(hooksMap, "preToolUse")
+	} else {
+		hooksMap["preToolUse"] = filtered
+	}
+
+	if len(hooksMap) == 0 {
 		delete(raw, "hooks")
 	} else {
-		raw["hooks"] = hooks
+		raw["hooks"] = hooksMap
 	}
 	return writeRawJSON(path, raw)
 }
@@ -555,6 +546,33 @@ func readRawJSON(path string) map[string]any {
 	}
 	json.Unmarshal(data, &raw) //nolint:errcheck
 	return raw
+}
+
+// rawHooksMap returns the "hooks" sub-map from raw as a mutable
+// map[string]any, creating a new empty map if the key is absent or holds a
+// non-map value. Callers must write the returned map back via
+// raw["hooks"] = m after modifying it, because a newly-created map is not
+// automatically inserted.
+func rawHooksMap(raw map[string]any) map[string]any {
+	if m, ok := raw["hooks"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+// unmarshalHookEntries unmarshals a raw value (from a hooks map) into a
+// typed slice. Returns a nil slice without error on missing/null input.
+func unmarshalHookEntries[T any](v any) []T {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out []T
+	json.Unmarshal(b, &out) //nolint:errcheck
+	return out
 }
 
 // writeRawJSON writes v to path with standard indentation.

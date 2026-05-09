@@ -881,3 +881,204 @@ func TestInstallCopilotPreservesExtraKeys(t *testing.T) {
 		t.Errorf("expected 2 hooks (existing + vibecop), got %d: %#v", len(cfg.Hooks.PreToolUse), cfg.Hooks.PreToolUse)
 	}
 }
+
+// --- Hooks sub-key preservation (regression for key-loss bug) ---
+//
+// All harnesses must preserve hook types they don't manage (e.g. PostToolUse
+// for Claude, postToolUse for Copilot) when installing or uninstalling.
+
+func TestInstallClaudePreservesOtherHookTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude")
+	os.MkdirAll(claudeDir, 0755)
+
+	// Pre-existing settings with a PostToolUse entry that vibecop must not touch.
+	existing := `{
+		"theme": "dark",
+		"hooks": {
+			"PostToolUse": [{"matcher":"","hooks":[{"type":"command","command":"audit.sh"}]}]
+		}
+	}`
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(existing), 0644)
+
+	if err := InstallHooks(HarnessClaude, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key missing or wrong type after install")
+	}
+	if _, ok := hooksAny["PostToolUse"]; !ok {
+		t.Error("PostToolUse hook type was dropped by install")
+	}
+	if _, ok := hooksAny["PreToolUse"]; !ok {
+		t.Error("PreToolUse (vibecop) not written")
+	}
+}
+
+func TestUninstallClaudePreservesOtherHookTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude")
+	os.MkdirAll(claudeDir, 0755)
+
+	// Install, then add a PostToolUse entry manually.
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{
+		"hooks": {
+			"PreToolUse": [{"matcher":"","hooks":[{"type":"command","command":"vibecop hook"}]}],
+			"PostToolUse": [{"matcher":"","hooks":[{"type":"command","command":"audit.sh"}]}]
+		}
+	}`), 0644)
+
+	if err := UninstallHooks(HarnessClaude); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	// hooks key must survive because PostToolUse is still in it.
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key was deleted, but PostToolUse should have kept it alive")
+	}
+	if _, ok := hooksAny["PostToolUse"]; !ok {
+		t.Error("PostToolUse was removed during vibecop uninstall")
+	}
+	if _, ok := hooksAny["PreToolUse"]; ok {
+		// PreToolUse may have been removed or become empty; just ensure
+		// PostToolUse survived.
+	}
+}
+
+func TestInstallGeminiPreservesOtherHookTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	geminiDir := filepath.Join(os.Getenv("HOME"), ".gemini")
+	os.MkdirAll(geminiDir, 0755)
+
+	// Hypothetical future AfterTool hook that vibecop should leave alone.
+	existing := `{
+		"hooks": {
+			"AfterTool": [{"matcher":"","hooks":[{"type":"command","command":"post.sh"}]}]
+		}
+	}`
+	os.WriteFile(filepath.Join(geminiDir, "settings.json"), []byte(existing), 0644)
+
+	if err := InstallHooks(HarnessGemini, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key missing after gemini install")
+	}
+	if _, ok := hooksAny["AfterTool"]; !ok {
+		t.Error("AfterTool hook type was dropped by gemini install")
+	}
+}
+
+func TestUninstallGeminiPreservesOtherHookTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	geminiDir := filepath.Join(os.Getenv("HOME"), ".gemini")
+	os.MkdirAll(geminiDir, 0755)
+
+	os.WriteFile(filepath.Join(geminiDir, "settings.json"), []byte(`{
+		"hooks": {
+			"BeforeTool": [{"hooks":[{"type":"command","command":"vibecop hook"}]}],
+			"AfterTool":  [{"hooks":[{"type":"command","command":"post.sh"}]}]
+		}
+	}`), 0644)
+
+	if err := UninstallHooks(HarnessGemini); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key deleted but AfterTool should keep it alive")
+	}
+	if _, ok := hooksAny["AfterTool"]; !ok {
+		t.Error("AfterTool was removed during gemini uninstall")
+	}
+}
+
+func TestInstallCopilotPreservesOtherHookEventTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	copilotDir := filepath.Join(os.Getenv("HOME"), ".copilot")
+	os.MkdirAll(copilotDir, 0755)
+
+	// Copilot has many hook types. postToolUse and sessionStart should survive.
+	existing := `{
+		"version": 1,
+		"hooks": {
+			"postToolUse":  [{"type":"command","bash":"audit.sh"}],
+			"sessionStart": [{"type":"command","bash":"start.sh"}]
+		}
+	}`
+	os.WriteFile(filepath.Join(copilotDir, "settings.json"), []byte(existing), 0644)
+
+	if err := InstallHooks(HarnessCopilot, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(copilotDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key missing after copilot install")
+	}
+	if _, ok := hooksAny["postToolUse"]; !ok {
+		t.Error("postToolUse dropped by copilot install")
+	}
+	if _, ok := hooksAny["sessionStart"]; !ok {
+		t.Error("sessionStart dropped by copilot install")
+	}
+	if _, ok := hooksAny["preToolUse"]; !ok {
+		t.Error("preToolUse (vibecop) not written")
+	}
+}
+
+func TestUninstallCopilotPreservesOtherHookEventTypes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	copilotDir := filepath.Join(os.Getenv("HOME"), ".copilot")
+	os.MkdirAll(copilotDir, 0755)
+
+	os.WriteFile(filepath.Join(copilotDir, "settings.json"), []byte(`{
+		"version": 1,
+		"hooks": {
+			"preToolUse":  [{"type":"command","bash":"vibecop hook"}],
+			"postToolUse": [{"type":"command","bash":"audit.sh"}]
+		}
+	}`), 0644)
+
+	if err := UninstallHooks(HarnessCopilot); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(copilotDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooksAny, ok := raw["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks key deleted but postToolUse should keep it alive")
+	}
+	if _, ok := hooksAny["postToolUse"]; !ok {
+		t.Error("postToolUse dropped by copilot uninstall")
+	}
+}
