@@ -169,6 +169,8 @@ api_key    = ""
 
 `vibecop setup` auto-detects Ollama models if Ollama is running locally.
 
+`audit_enabled` controls whether every verdict is written to a permanent daily JSONL file at `~/.vibecop/projects/<project-hash>/audit/YYYY-MM-DD.jsonl`. Each record includes tool name, input, verdict, reason, and latency. Default is `false` — the daemon keeps only an ephemeral in-memory window of recent verdicts (see `activity_window`) and discards the rest.
+
 ---
 
 ## TUI
