@@ -22,6 +22,11 @@ type writeVerdictCase struct {
 }
 
 func TestWriteVerdict(t *testing.T) {
+	// Redirect hint markers to a per-test temp dir so the (copilot, approve)
+	// row gets a deterministic stderr — fresh dir means the marker doesn't
+	// exist, hint always emits.
+	t.Cleanup(swapHintsDir(t.TempDir()))
+
 	cases := []writeVerdictCase{
 		// --- Claude PreToolUse ---
 		{
@@ -128,11 +133,14 @@ func TestWriteVerdict(t *testing.T) {
 
 		// --- Copilot preToolUse ---
 		{
-			name:    "copilot preToolUse approve",
+			name:    "copilot preToolUse approve emits hint",
 			harness: HarnessCopilot, event: EventCopilotPreToolUse,
 			verdict: daemon.Verdict{Verdict: "approve", Reason: "ignored on allow"},
-			// Documented Copilot allow form omits reason.
+			// Documented Copilot allow form omits reason. We additionally
+			// emit a stderr hint pointing the user at /allow-all on, since
+			// Copilot does not currently honor permissionDecision="allow".
 			wantStdout: `{"permissionDecision":"allow"}`,
+			wantStderr: "/allow-all on",
 		},
 		{
 			name:    "copilot preToolUse deny",

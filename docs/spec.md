@@ -237,6 +237,11 @@ Reason fields are omitted when the daemon's reason is empty.
 | `gemini`, `BeforeTool`       | `{"decision":"allow","reason":"…"}`                                                                                    | `{"decision":"deny","reason":"…"}`                                                                                           |
 | `copilot`, `preToolUse`      | `{"permissionDecision":"allow"}`                                                                                       | `{"permissionDecision":"deny","permissionDecisionReason":"…"}`                                                               |
 
+### Harness limitations
+
+- **Copilot CLI does not currently honor `permissionDecision: "allow"`.** The harness's normal permission flow runs anyway, so vibecop's `approve` verdict on Copilot is effectively informational. To get the "skip the prompt for approved tools" experience, run `/allow-all on` inside Copilot — vibecop's `deny` still blocks tool calls when `/allow-all on` is active. The hook surfaces this as a one-line stderr advisory at install time and again at runtime (throttled to once per hour via a marker file under `~/.vibecop/hints/`).
+- **Codex CLI cannot allow at `PreToolUse`.** vibecop installs under both `PreToolUse` and `PermissionRequest`; silent approval is delivered through `PermissionRequest`, where Codex honors it. No user action needed.
+
 ### Failure modes
 
 - **Daemon unreachable** — hook exits 0 silently (no stdout, no JSON).

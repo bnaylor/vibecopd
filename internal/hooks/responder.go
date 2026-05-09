@@ -41,6 +41,7 @@ func writeApprove(harness, event, reason string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "VibeCop: unrecognized harness=%q event=%q, falling open\n", harness, event)
 		return 0
 	}
+	emitHintOnce(harness, event, "approve", stderr)
 	if payload != nil {
 		_, _ = stdout.Write(payload)
 	}

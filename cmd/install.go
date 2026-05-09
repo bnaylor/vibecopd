@@ -42,9 +42,22 @@ testing a local build without overwriting the system install.`,
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "vibecop: installed hook for %s\n", h)
+			if note := harnessInstallNote(h); note != "" {
+				fmt.Fprintf(os.Stderr, "  note: %s\n", note)
+			}
 		}
 		return nil
 	},
+}
+
+// harnessInstallNote returns a one-line operator-facing note about a
+// harness-specific limitation surfaced at install time. Keep it short —
+// the hook also emits a runtime hint via emitHintOnce for the same case.
+func harnessInstallNote(harness string) string {
+	if harness == hooks.HarnessCopilot {
+		return `Copilot does not currently honor permissionDecision="allow"; vibecop's approve verdict is informational only. Use ` + "`/allow-all on`" + ` inside Copilot for harness-side auto-approval — vibecop deny still blocks.`
+	}
+	return ""
 }
 
 // resolveVibecopPath turns an optional --vibecop-path flag value into the
