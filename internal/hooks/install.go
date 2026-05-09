@@ -198,7 +198,10 @@ func installClaudeHooks(vibecopPath string) error {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 	entries := rawSlice(hooksMap["PreToolUse"])
 
@@ -221,7 +224,10 @@ func installGeminiHooks(vibecopPath string) error {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 
 	// Strip legacy snake_case before_tool key only if it's vibecop's own
@@ -267,7 +273,10 @@ func uninstallClaudeHooks() error {
 		return nil
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 	entries := rawSlice(hooksMap["PreToolUse"])
 	filtered := removeNestedVibecopEntries(entries)
@@ -298,7 +307,10 @@ func uninstallGeminiHooks() error {
 		return nil
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 
 	// Strip legacy snake_case before_tool key only if it's vibecop's own —
@@ -338,7 +350,10 @@ func installCodexHooks(vibecopPath string) error {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 
 	want := hookCommand(vibecopPath)
@@ -363,7 +378,10 @@ func installCopilotHooks(vibecopPath string) error {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 
 	// Preserve the `version` key explicitly — write it back as 1 if absent
 	// so Copilot can parse the file.
@@ -392,7 +410,10 @@ func uninstallCodexHooks() error {
 		return nil
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 
 	preEntries := rawSlice(hooksMap["PreToolUse"])
@@ -429,7 +450,10 @@ func uninstallCopilotHooks() error {
 		return nil
 	}
 
-	raw := readRawJSON(path)
+	raw, err := readRawJSON(path)
+	if err != nil {
+		return err
+	}
 	hooksMap := rawHooksMap(raw)
 	entries := rawSlice(hooksMap["preToolUse"])
 	filtered := removeCopilotVibecopEntries(entries)
@@ -449,15 +473,25 @@ func uninstallCopilotHooks() error {
 }
 
 // readRawJSON reads a JSON file as a raw map, preserving all keys.
-// Returns an empty map if the file doesn't exist or is malformed.
-func readRawJSON(path string) map[string]any {
+// Returns an empty map if the file doesn't exist. Returns an error if
+// the file exists but is not valid JSON — callers must abort rather than
+// clobber a malformed user-authored config.
+func readRawJSON(path string) (map[string]any, error) {
 	raw := map[string]any{}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return raw
+		if os.IsNotExist(err) {
+			return raw, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	json.Unmarshal(data, &raw) //nolint:errcheck
-	return raw
+	if len(data) == 0 {
+		return raw, nil
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return raw, nil
 }
 
 // rawHooksMap returns the "hooks" sub-map from raw as a mutable

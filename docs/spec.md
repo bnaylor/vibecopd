@@ -103,17 +103,17 @@ vibecop stop               Stop the background daemon
 vibecop status             Show daemon status, current config, active project
 vibecop tui                Attach the TUI to a running daemon
 vibecop init               Initialize Guardian mode for the current project
-  --harness  claude|gemini|deepseek   Agent to use for prompt generation (required)
+  --harness  claude|codex|gemini|copilot   Agent to use for prompt generation (required)
   --dry-run                           Print generated prompt without saving
 vibecop install            Install hook scripts into the coding harness configs
-  --harness  claude|gemini|deepseek   Harness to install into (required or --all)
+  --harness  claude|codex|gemini|copilot   Harness to install into (required or --all)
   --all                               Install into all detected harnesses
 vibecop uninstall          Remove installed hook scripts
-  --harness  claude|gemini|deepseek
+  --harness  claude|codex|gemini|copilot
 vibecop hook               Hook entry point (called by installed scripts, reads stdin)
 vibecop test               Send a probe request to the configured endpoint
 vibecop refine             Regenerate the Guardian prompt for the current project
-  --harness  claude|gemini|deepseek
+  --harness  claude|codex|gemini|copilot
 ```
 
 ## Core Architecture
