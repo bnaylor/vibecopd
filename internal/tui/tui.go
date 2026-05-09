@@ -282,19 +282,21 @@ func (a *App) buildActivityPage() tview.Primitive {
 		AddItem(rightPanel, 0, 2, false)
 	flex.AddItem(middle, 0, 1, true)
 
-	// Log slot is 1 row, no border, no title — most days the daemon is
-	// silent here (only startup + actual errors emit log events) so a
-	// 7-row bordered panel was wasted real estate. The full history is
-	// still kept in logView; press `f` while it's focused to expand to
-	// fullscreen and read everything.
+	// Log slot is the smallest bordered TextView that still shows a
+	// content row: 3 lines total (border + 1 content row + border).
+	// Way less than the original 7-row tail but keeps the same border /
+	// title styling as the other panes, so the focus-highlight
+	// callback has a border to recolor and the user can see where the
+	// pane lives even when there's no log activity. Press `f` while
+	// focused to expand to a multi-row scrollback view.
 	a.logView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft).
 		SetScrollable(true).
 		SetWrap(false)
-	a.logView.SetBorder(false)
-	a.logView.SetText("[gray]log: idle  ([white]f[gray] to expand)[white]")
-	flex.AddItem(a.logView, 1, 0, false)
+	a.logView.SetTitle("log").SetBorder(true)
+	a.logView.SetText("[gray]idle  ([white]f[gray] to expand)[white]")
+	flex.AddItem(a.logView, 3, 0, false)
 
 	// Cycle order: list first (most-used), then sidebar top-to-bottom,
 	// then log. Yellow border highlights the focused panel.
