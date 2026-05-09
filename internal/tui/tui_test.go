@@ -205,6 +205,50 @@ func TestToggleFullscreenIgnoredOnNonActivityPages(t *testing.T) {
 	}
 }
 
+func TestFormatActivityLineNoTruncation(t *testing.T) {
+	// 200-char input that previously got ellipsised at 57 + "..." in
+	// the List-based renderer. With the TextView + horizontal scroll
+	// design the full text must round-trip into the rendered line.
+	longInput := strings.Repeat("x", 200)
+	evt := daemon.Event{
+		Tool:      "Bash",
+		Input:     longInput,
+		Verdict:   "approve",
+		Timestamp: "2026-05-08T20:13:01Z",
+	}
+	got := formatActivityLine(evt)
+	if !strings.Contains(got, longInput) {
+		t.Fatalf("expected full input preserved (no ellipsis); got: %q", got)
+	}
+	if strings.Contains(got, "...") {
+		t.Errorf("ellipsis must not appear in formatted line; got: %q", got)
+	}
+	// Timestamp should be truncated to HH:MM:SS for the embedded view.
+	if !strings.Contains(got, "20:13:01") || strings.Contains(got, "2026-05-08") {
+		t.Errorf("expected HH:MM:SS timestamp without date prefix; got: %q", got)
+	}
+}
+
+func TestFormatActivityLineWithReason(t *testing.T) {
+	evt := daemon.Event{
+		Tool:      "Bash",
+		Input:     "rm -rf /etc/passwd",
+		Verdict:   "deny",
+		Reason:    "Critical system file",
+		Timestamp: "2026-05-08T20:13:01Z",
+	}
+	got := formatActivityLine(evt)
+	if !strings.Contains(got, "rm -rf /etc/passwd") {
+		t.Errorf("expected input in line; got: %q", got)
+	}
+	if !strings.Contains(got, "Critical system file") {
+		t.Errorf("expected reason in line; got: %q", got)
+	}
+	if !strings.Contains(got, "DENIED") {
+		t.Errorf("expected verdict label DENIED; got: %q", got)
+	}
+}
+
 func TestCycleActivityFocusWraps(t *testing.T) {
 	a := &App{
 		app: tview.NewApplication(),

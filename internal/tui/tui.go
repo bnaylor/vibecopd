@@ -124,7 +124,7 @@ type App struct {
 	socketPath string
 
 	headerView  *tview.TextView
-	activity    *tview.List
+	activity    *tview.TextView
 	latencyView *tview.TextView
 	configView  *tview.TextView
 	logView     *tview.TextView
@@ -159,7 +159,14 @@ type App struct {
 	latency       *latencyStats
 	events        int
 	logHasEntries bool
-	mu            sync.Mutex
+
+	// activityRows holds the formatted lines that render in the
+	// activity TextView. Newest first (matching the previous List
+	// ordering: latest event on top). Capped at maxActivityItems.
+	// Rebuilt on each addActivity since TextView has no insert API.
+	activityRows []string
+
+	mu sync.Mutex
 }
 
 // focusedBorder is the border color of the currently focused panel.
@@ -289,7 +296,20 @@ func (a *App) buildActivityPage() tview.Primitive {
 	a.logView.SetText("[gray]idle  ([white]f[gray] to expand)[white]")
 	rightPanel.AddItem(a.logView, 3, 0, false)
 
-	a.activity = tview.NewList().ShowSecondaryText(true)
+	// Activity feed is a TextView (not a List) so we can:
+	//   - SetWrap(false): never wrap or truncate; long input strings
+	//     stay on one line and run off the right edge of the viewport.
+	//   - SetScrollable(true): focus + ←/→ scroll horizontally to see
+	//     the rest of a long line; ↑/↓ scrolls vertically through
+	//     history. Works the same in the embedded slot and fullscreen.
+	// tview.List clips its items at the right border with no horizontal
+	// scroll affordance, which is why we used to truncate input at 60
+	// chars with an ellipsis. Now nothing is hidden.
+	a.activity = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft).
+		SetWrap(false).
+		SetScrollable(true)
 	a.activity.SetTitle("activity").SetBorder(true)
 
 	// Mark the activity List as the focused item inside its Flex chain.
@@ -629,26 +649,60 @@ func (a *App) handleEvent(evt daemon.Event) {
 }
 
 func (a *App) addActivity(evt daemon.Event) {
-	label := verdictLabel(evt.Verdict)
-	color := verdictColor(evt.Verdict)
-	colorName := color.String()
+	line := formatActivityLine(evt)
 
-	mainText := fmt.Sprintf("[%s::] %s", colorName, evt.Tool)
-	if len(evt.Input) > 60 {
-		mainText += ": " + evt.Input[:57] + "..."
-	} else {
-		mainText += ": " + evt.Input
+	a.mu.Lock()
+	a.activityRows = append([]string{line}, a.activityRows...)
+	if len(a.activityRows) > maxActivityItems {
+		a.activityRows = a.activityRows[:maxActivityItems]
 	}
-
-	secondary := fmt.Sprintf("[%s::]%s[-:-:-]  %s", colorName, label, evt.Timestamp)
+	text := strings.Join(a.activityRows, "\n")
+	a.mu.Unlock()
 
 	a.app.QueueUpdateDraw(func() {
-		a.activity.InsertItem(0, mainText, secondary, 0, nil)
-		// Trim.
-		for a.activity.GetItemCount() > maxActivityItems {
-			a.activity.RemoveItem(a.activity.GetItemCount() - 1)
-		}
+		a.activity.SetText(text)
 	})
+}
+
+// formatActivityLine renders one event as a single line. Columnar
+// layout (timestamp · verdict · tool · input · reason) with fixed
+// widths so the columns line up; the right-most column (input + reason)
+// is left intact at full length so the user can horizontally scroll
+// to see it instead of having it ellipsised. Pure for testability.
+func formatActivityLine(evt daemon.Event) string {
+	colorName := verdictColor(evt.Verdict).String()
+	label := verdictLabel(evt.Verdict)
+
+	// Timestamps from the daemon are RFC3339-ish; show just HH:MM:SS
+	// in the embedded view. The full timestamp is still visible in
+	// the audit log for forensic use.
+	ts := evt.Timestamp
+	if i := strings.Index(ts, "T"); i >= 0 && len(ts) >= i+9 {
+		ts = ts[i+1 : i+9]
+	} else if len(ts) > 8 {
+		ts = ts[:8]
+	}
+
+	tool := evt.Tool
+	if tool == "" {
+		tool = "-"
+	}
+	body := evt.Input
+	if evt.Reason != "" {
+		if body != "" {
+			body += "  [gray]·[white] " + evt.Reason
+		} else {
+			body = "[gray]·[white] " + evt.Reason
+		}
+	}
+
+	// Widths chosen to fit common values without padding the input
+	// off-screen on a narrow viewport: ESCALATED (9) and Notebook (8)
+	// are the worst-case for verdict and tool respectively.
+	return fmt.Sprintf(
+		"[gray]%-8s[white]  [%s]%-9s[white]  [yellow]%-10s[white]  %s",
+		ts, colorName, label, tool, body,
+	)
 }
 
 func (a *App) addLogLine(evt daemon.Event) {
