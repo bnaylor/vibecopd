@@ -258,6 +258,14 @@ type App struct {
 	clockDone chan struct{}
 	closeOnce sync.Once
 
+	// escalInFlight is set to true while completeSelectedAndAdvance has
+	// a goroutine in flight, and reset to false inside the terminal
+	// QueueUpdateDraw closure. Both reads and writes happen exclusively
+	// on the tview main goroutine (the input capture that sets it, and
+	// the QueueUpdateDraw closure that clears it) so no mutex is
+	// required.
+	escalInFlight bool
+
 	mu sync.Mutex
 }
 
@@ -680,7 +688,15 @@ func formatEscalDetailEmpty() string {
 // been queued), causing rapid `a`/`d` keystrokes to act on stale
 // indices and surface "pending record not found" errors. This shape
 // is the fix for that race.
+//
+// escalInFlight prevents a second goroutine from launching while the
+// first is still in flight. Both the set (here, on the main goroutine)
+// and the clear (inside every terminal QueueUpdateDraw closure) happen
+// exclusively on the tview main goroutine.
 func (a *App) completeSelectedAndAdvance(humanDecision string) {
+	if a.escalInFlight {
+		return
+	}
 	if a.escalations == nil || a.escalations.GetItemCount() == 0 {
 		return
 	}
@@ -689,6 +705,7 @@ func (a *App) completeSelectedAndAdvance(humanDecision string) {
 		return
 	}
 	target := a.pending[idx]
+	a.escalInFlight = true
 
 	go func() {
 		if err := a.completePending(target.ProjectHash, target.Key, humanDecision); err != nil {
@@ -698,6 +715,7 @@ func (a *App) completeSelectedAndAdvance(humanDecision string) {
 			// surrounding entry leaves them stuck unable to tell
 			// what they were acting on.
 			a.app.QueueUpdateDraw(func() {
+				a.escalInFlight = false
 				banner := fmt.Sprintf("\n  [red]complete_pending failed: %v[white]\n\n", err)
 				a.escalDetailView.SetText(banner + formatEscalDetailContent(target, a.displayLocalTime))
 			})
@@ -712,12 +730,14 @@ func (a *App) completeSelectedAndAdvance(humanDecision string) {
 		pending, auditEnabled, fetchErr := a.fetchPending()
 		if fetchErr != nil {
 			a.app.QueueUpdateDraw(func() {
+				a.escalInFlight = false
 				a.escalEmpty.SetText(fmt.Sprintf("[red]list_pending failed: %v[white]", fetchErr))
 			})
 			return
 		}
 
 		a.app.QueueUpdateDraw(func() {
+			a.escalInFlight = false
 			a.rebuildEscalationList(pending, auditEnabled)
 			a.advanceAfterCompletion(idx)
 		})

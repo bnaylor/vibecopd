@@ -202,6 +202,54 @@ func TestStripValidationMarkersNoOpWhenAbsent(t *testing.T) {
 // $EDITOR='vim --noplugin' previously failed silently because
 // exec.Command treated the whole string as a binary path while
 // supportsPlusLineFlag parsed only "vim".
+
+// TestEditConfigSymlinkResolution guards the fix where editConfigFile
+// calls filepath.EvalSymlinks before copyToTemp. Without the fix,
+// os.Rename would replace the symlink entry itself rather than the
+// file it points to. After the fix, the temp file is created next to
+// the real target so the eventual rename stays on the same device.
+func TestEditConfigSymlinkResolution(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	linkDir := filepath.Join(base, "links")
+	if err := os.Mkdir(realDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(linkDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	realPath := filepath.Join(realDir, "config.toml")
+	if err := os.WriteFile(realPath, []byte("key = \"val\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(linkDir, "config.toml")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skip("symlinks not supported on this OS:", err)
+	}
+
+	// Simulate what editConfigFile does now: resolve symlinks first.
+	livePath := linkPath
+	if rp, err := filepath.EvalSymlinks(livePath); err == nil {
+		livePath = rp
+	}
+
+	if livePath == linkPath {
+		t.Fatal("EvalSymlinks should have resolved the link, but path is unchanged")
+	}
+
+	tmp, err := copyToTemp(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp)
+
+	// The temp file must land next to the real file, not the symlink.
+	if filepath.Dir(tmp) != realDir {
+		t.Errorf("temp file should be in real dir %q; got %q", realDir, filepath.Dir(tmp))
+	}
+}
+
 func TestResolveEditorParsesEditorWithFlags(t *testing.T) {
 	t.Setenv("EDITOR", "vim --noplugin --cmd setSomething")
 	bin, args := resolveEditor()

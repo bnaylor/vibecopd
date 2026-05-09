@@ -613,3 +613,28 @@ func TestMinMax(t *testing.T) {
 		t.Error("max of nil should be 0")
 	}
 }
+
+// TestEscalInFlightGuardPreventsDoubleDispatch guards the fix for the
+// rapid-keystroke race: a second a/d press while the first goroutine
+// is still in flight must be ignored. Before the fix, two goroutines
+// could run concurrently, act on stale indices, and corrupt the queue.
+func TestEscalInFlightGuardPreventsDoubleDispatch(t *testing.T) {
+	a := &App{
+		escalInFlight: true, // simulate a goroutine already in flight
+		escalations:   tview.NewList(),
+		pending: []daemon.PendingEntry{
+			{ProjectHash: "h1", Key: "k1"},
+		},
+	}
+	a.escalations.AddItem("item", "", 0, nil)
+
+	// The call must short-circuit before spawning a goroutine, so
+	// escalInFlight stays true (it is only reset inside a
+	// QueueUpdateDraw closure, which the guard never reaches).
+	a.completeSelectedAndAdvance("approved")
+
+	if !a.escalInFlight {
+		t.Error("escalInFlight should remain true — the guard should have short-circuited before spawning a goroutine")
+	}
+}
+

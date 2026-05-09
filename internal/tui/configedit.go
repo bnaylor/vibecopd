@@ -64,6 +64,14 @@ func (a *App) editConfigFile() {
 	}
 
 	livePath := a.configPath
+	// Resolve symlinks so os.Rename replaces the file the link points
+	// to, not the symlink entry itself. EvalSymlinks fails only when
+	// the path doesn't exist or a loop is detected; fall back to the
+	// original path in that case (current behaviour is better than
+	// refusing to open the editor).
+	if realPath, err := filepath.EvalSymlinks(livePath); err == nil {
+		livePath = realPath
+	}
 	tmpPath, err := copyToTemp(livePath)
 	if err != nil {
 		a.flashConfigStatus(fmt.Sprintf("(prepare temp file failed: %v)", err))
