@@ -288,6 +288,32 @@ func TestDetectClaudeWhenNoHookEventName(t *testing.T) {
 	}
 }
 
+func TestSanitizeHarnessKnownAndUnknown(t *testing.T) {
+	for _, h := range []string{HarnessClaude, HarnessGemini, HarnessCodex, HarnessCopilot} {
+		if got := SanitizeHarness(h); got != h {
+			t.Errorf("SanitizeHarness(%q) = %q; want %q", h, got, h)
+		}
+	}
+	for _, h := range []string{"", "deepseek", "../../etc/passwd", "claude\x00", "CLAUDE"} {
+		if got := SanitizeHarness(h); got != "" {
+			t.Errorf("SanitizeHarness(%q) = %q; want empty (clamped)", h, got)
+		}
+	}
+}
+
+func TestSanitizeHookEventKnownAndUnknown(t *testing.T) {
+	for _, e := range []string{EventPreToolUse, EventPermissionRequest, EventBeforeTool, EventCopilotPreToolUse} {
+		if got := SanitizeHookEvent(e); got != e {
+			t.Errorf("SanitizeHookEvent(%q) = %q; want %q", e, got, e)
+		}
+	}
+	for _, e := range []string{"", "PostToolUse", "fizz", "preToolUseV2"} {
+		if got := SanitizeHookEvent(e); got != "" {
+			t.Errorf("SanitizeHookEvent(%q) = %q; want empty (clamped)", e, got)
+		}
+	}
+}
+
 func TestParseWithFormatCodexMissingEvent(t *testing.T) {
 	// Codex always sends hook_event_name, but if it's missing we fall to
 	// the PreToolUse default rather than fail.

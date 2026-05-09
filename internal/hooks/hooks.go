@@ -80,6 +80,28 @@ const (
 	EventCopilotPreToolUse = "preToolUse"        // Copilot (camelCase)
 )
 
+// SanitizeHarness returns harness only if it is one of the recognized
+// harness constants; otherwise empty. Used at the daemon ↔ telemetry
+// boundary to clamp metric/span label cardinality so a malicious local
+// UDS client can't blow up the dashboard with arbitrary harness strings.
+func SanitizeHarness(harness string) string {
+	switch harness {
+	case HarnessClaude, HarnessGemini, HarnessCodex, HarnessCopilot:
+		return harness
+	}
+	return ""
+}
+
+// SanitizeHookEvent returns event only if it is one of the recognized
+// per-harness event names; otherwise empty. Same purpose as SanitizeHarness.
+func SanitizeHookEvent(event string) string {
+	switch event {
+	case EventPreToolUse, EventPermissionRequest, EventBeforeTool, EventCopilotPreToolUse:
+		return event
+	}
+	return ""
+}
+
 // defaultEventFor returns the wire-format event name when a payload omits
 // hook_event_name. Codex always sends one; absence there is a parse error.
 func defaultEventFor(harness string) string {

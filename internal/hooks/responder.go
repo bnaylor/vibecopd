@@ -22,17 +22,45 @@ func WriteVerdict(harness, event string, v daemon.Verdict, stdout, stderr io.Wri
 	case "deny":
 		return writeDeny(harness, event, v.Reason, stdout, stderr)
 	case "escalate":
-		// No stdout JSON: vibecop's "escalate" defers to the harness's
-		// normal permission flow rather than forcing an "ask" prompt.
-		// Stderr preserved for operator visibility.
-		if v.Reason != "" {
-			fmt.Fprintf(stderr, "VibeCop [ESCALATE]: %s\n", v.Reason)
-		}
-		return 0
+		return writeEscalate(harness, event, v.Reason, stderr)
 	default:
 		fmt.Fprintf(stderr, "VibeCop: unknown verdict=%q, falling open\n", v.Verdict)
 		return 0
 	}
+}
+
+// writeEscalate emits the operator-visible `[ESCALATE]` stderr line only when
+// the (harness, event) combo is one we know — same fail-open gate the deny
+// path uses. Without this gate, the daemon's reason text (which can quote
+// the agent's command line back at us) leaks to stderr even when we don't
+// know what harness sent the request.
+func writeEscalate(harness, event, reason string, stderr io.Writer) int {
+	if !recognizedCombo(harness, event) {
+		fmt.Fprintf(stderr, "VibeCop: unrecognized harness=%q event=%q, falling open\n", harness, event)
+		return 0
+	}
+	if reason != "" {
+		fmt.Fprintf(stderr, "VibeCop [ESCALATE]: %s\n", reason)
+	}
+	return 0
+}
+
+// recognizedCombo reports whether (harness, event) is one of the rows in the
+// per-harness response table — i.e. one for which approve/deny/escalate has
+// a defined behavior. Used to gate stderr output that contains user-visible
+// reason text.
+func recognizedCombo(harness, event string) bool {
+	switch harness {
+	case HarnessClaude:
+		return event == "" || event == EventPreToolUse
+	case HarnessCodex:
+		return event == EventPreToolUse || event == EventPermissionRequest
+	case HarnessGemini:
+		return event == "" || event == EventBeforeTool
+	case HarnessCopilot:
+		return event == "" || event == EventCopilotPreToolUse
+	}
+	return false
 }
 
 func writeApprove(harness, event, reason string, stdout, stderr io.Writer) int {

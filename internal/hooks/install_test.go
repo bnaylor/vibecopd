@@ -128,6 +128,61 @@ func TestInstallGeminiHooksMigratesLegacyBeforeToolKey(t *testing.T) {
 	}
 }
 
+// Regression test for F-C1 review finding: a user who manually configured a
+// non-vibecop hook under the legacy `before_tool` key (e.g. ported a
+// third-party hook using the old shape) must NOT have it silently nuked
+// when vibecop installs.
+func TestInstallGeminiHooksPreservesNonVibecopLegacyBeforeTool(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
+
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	os.MkdirAll(geminiDir, 0755)
+	os.WriteFile(filepath.Join(geminiDir, "settings.json"),
+		[]byte(`{"hooks":{"before_tool":"some-third-party-tool"}}`), 0644)
+
+	if err := InstallHooks(HarnessGemini, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
+	if !bytes.Contains(data, []byte("some-third-party-tool")) {
+		t.Errorf("user's non-vibecop before_tool value lost: %s", string(data))
+	}
+	if !bytes.Contains(data, []byte("BeforeTool")) {
+		t.Errorf("PascalCase BeforeTool not written alongside legacy: %s", string(data))
+	}
+}
+
+// Regression test for E-H3: writeRawJSON must be atomic — temp file +
+// rename. A crash mid-write must not corrupt the user's settings.json.
+// We can't induce a real crash, but we can assert that the tmp file is
+// gone after a successful write (no leftover) and that the resulting
+// file is valid JSON.
+func TestWriteRawJSONIsAtomicAndLeavesNoTempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	original := map[string]any{"keep": "me"}
+	if err := writeRawJSON(path, original); err != nil {
+		t.Fatal(err)
+	}
+	tmp := path + ".vibecop.tmp"
+	if _, err := os.Stat(tmp); err == nil {
+		t.Errorf("temp file %s still exists after successful write", tmp)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("written file is not valid JSON: %v\n%s", err, string(data))
+	}
+	if got["keep"] != "me" {
+		t.Errorf("content lost: %v", got)
+	}
+}
+
 func TestInstallUnsupportedHarness(t *testing.T) {
 	err := InstallHooks("deepseek", "")
 	if err == nil {
@@ -1008,6 +1063,144 @@ func TestUninstallGeminiPreservesOtherHookTypes(t *testing.T) {
 	}
 	if _, ok := hooksAny["AfterTool"]; !ok {
 		t.Error("AfterTool was removed during gemini uninstall")
+	}
+}
+
+// Regression test for D-Critical: previously the install path round-tripped
+// each hook entry through a typed struct that knew only about `type` + `bash`,
+// silently dropping `powershell`, `cwd`, `timeoutSec`, and any other fields
+// the user authored on a hook entry. This locks in the raw-walk preservation.
+func TestInstallCopilotPreservesUnknownFieldsOnHookEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	copilotDir := filepath.Join(os.Getenv("HOME"), ".copilot")
+	os.MkdirAll(copilotDir, 0755)
+
+	// User has a non-vibecop preToolUse hook with cross-platform siblings
+	// (powershell, cwd) and a custom timeoutSec. None of these belong in
+	// vibecop's struct definition; all must survive install.
+	existing := `{
+		"version": 1,
+		"hooks": {
+			"preToolUse": [
+				{
+					"type": "command",
+					"bash": "/usr/local/bin/audit.sh",
+					"powershell": "C:\\scripts\\audit.ps1",
+					"cwd": "/home/me/scripts",
+					"timeoutSec": 45
+				}
+			]
+		}
+	}`
+	os.WriteFile(filepath.Join(copilotDir, "settings.json"), []byte(existing), 0644)
+
+	if err := InstallHooks(HarnessCopilot, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(copilotDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooks := raw["hooks"].(map[string]any)
+	preEntries, _ := hooks["preToolUse"].([]any)
+	if len(preEntries) != 2 {
+		t.Fatalf("expected 2 preToolUse entries (existing + vibecop), got %d", len(preEntries))
+	}
+
+	// Find the user's entry by powershell field.
+	var user map[string]any
+	for _, e := range preEntries {
+		m := e.(map[string]any)
+		if _, has := m["powershell"]; has {
+			user = m
+			break
+		}
+	}
+	if user == nil {
+		t.Fatalf("user entry missing entirely: %s", string(data))
+	}
+	if user["powershell"] != "C:\\scripts\\audit.ps1" {
+		t.Errorf("powershell sibling lost or mutated: %v", user["powershell"])
+	}
+	if user["cwd"] != "/home/me/scripts" {
+		t.Errorf("cwd sibling lost: %v", user["cwd"])
+	}
+	if user["timeoutSec"] != float64(45) {
+		t.Errorf("timeoutSec sibling lost: %v", user["timeoutSec"])
+	}
+	if user["bash"] != "/usr/local/bin/audit.sh" {
+		t.Errorf("user's bash command was overwritten: %v", user["bash"])
+	}
+}
+
+// Regression test for D-Critical (matcher-group shape): timeout, name, and
+// statusMessage on inner hooks are not in vibecop's struct definitions but
+// must survive install on Claude/Codex/Gemini.
+func TestInstallClaudePreservesUnknownFieldsOnInnerHook(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude")
+	os.MkdirAll(claudeDir, 0755)
+
+	existing := `{
+		"hooks": {
+			"PreToolUse": [
+				{
+					"matcher": "Bash",
+					"hooks": [
+						{
+							"type": "command",
+							"command": "/usr/local/bin/policy-check",
+							"timeout": 60,
+							"name": "policy"
+						}
+					],
+					"customMatcherFlag": true
+				}
+			]
+		}
+	}`
+	os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(existing), 0644)
+
+	if err := InstallHooks(HarnessClaude, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	var raw map[string]any
+	json.Unmarshal(data, &raw)
+
+	hooks := raw["hooks"].(map[string]any)
+	pre, _ := hooks["PreToolUse"].([]any)
+	if len(pre) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(pre))
+	}
+
+	// User's entry: keyed by the customMatcherFlag we set.
+	var user map[string]any
+	for _, e := range pre {
+		m := e.(map[string]any)
+		if _, has := m["customMatcherFlag"]; has {
+			user = m
+			break
+		}
+	}
+	if user == nil {
+		t.Fatalf("user entry missing: %s", string(data))
+	}
+	if user["customMatcherFlag"] != true {
+		t.Errorf("customMatcherFlag sibling lost on top-level entry: %v", user["customMatcherFlag"])
+	}
+	innerArr, _ := user["hooks"].([]any)
+	if len(innerArr) != 1 {
+		t.Fatalf("expected 1 inner hook, got %d", len(innerArr))
+	}
+	inner := innerArr[0].(map[string]any)
+	if inner["timeout"] != float64(60) {
+		t.Errorf("inner timeout lost: %v", inner["timeout"])
+	}
+	if inner["name"] != "policy" {
+		t.Errorf("inner name lost: %v", inner["name"])
 	}
 }
 

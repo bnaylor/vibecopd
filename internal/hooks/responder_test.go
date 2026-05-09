@@ -211,6 +211,22 @@ func TestWriteVerdict(t *testing.T) {
 	}
 }
 
+// Regression test for review finding C-H1: an escalate verdict on an
+// unrecognized (harness, event) combo must NOT leak the daemon's reason
+// to stderr — the reason text can quote agent input. Same fail-open gate
+// as the deny path.
+func TestWriteVerdictEscalateDoesNotLeakReasonOnUnknownCombo(t *testing.T) {
+	t.Cleanup(swapHintsDir(t.TempDir()))
+	var stdout, stderr bytes.Buffer
+	WriteVerdict("nope", "nope", daemon.Verdict{Verdict: "escalate", Reason: "secret-from-agent"}, &stdout, &stderr)
+	if strings.Contains(stderr.String(), "[ESCALATE]") {
+		t.Errorf("stderr leaked ESCALATE line on unknown combo: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "secret-from-agent") {
+		t.Errorf("reason text leaked on unknown-combo escalate: %q", stderr.String())
+	}
+}
+
 func TestWriteVerdictDenyDoesNotLeakDenyStderrOnUnknownCombo(t *testing.T) {
 	// Regression: an unknown (harness, event) for a deny must NOT also emit
 	// the "VibeCop [DENY]:" line — the verdict was real but we couldn't
