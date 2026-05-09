@@ -363,6 +363,11 @@ func (a *App) escalationsInput(event *tcell.EventKey) *tcell.EventKey {
 	return event
 }
 
+// switchTo runs on the tview main goroutine (called from input handlers).
+// It must NOT call QueueUpdate{,Draw} — those block waiting for the main
+// loop to drain the update channel, which deadlocks since the main loop
+// is currently executing this handler. Direct primitive mutation is safe
+// here; tview redraws automatically after the input handler returns.
 func (a *App) switchTo(name string) {
 	if name == a.currentPage {
 		return
@@ -372,9 +377,7 @@ func (a *App) switchTo(name string) {
 	if name == pageEscalations {
 		a.requestEscalationRefresh(true)
 	}
-	a.app.QueueUpdateDraw(func() {
-		a.updateStatusBar()
-	})
+	a.updateStatusBar()
 }
 
 func (a *App) openHelp() {
@@ -538,10 +541,10 @@ func (a *App) updateHeader(_ daemon.Event) {
 	})
 }
 
+// refreshConfig runs on the tview main goroutine (input handler). Same
+// deadlock rule as switchTo — set the primitive directly.
 func (a *App) refreshConfig() {
-	a.app.QueueUpdateDraw(func() {
-		a.configView.SetText("(press r to refresh from daemon)")
-	})
+	a.configView.SetText("(press r to refresh from daemon)")
 }
 
 // UpdateConfig is called externally (or on timer) to refresh the config display.

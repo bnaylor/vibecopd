@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bnaylor/vibecop/internal/daemon"
 	"github.com/rivo/tview"
@@ -203,6 +204,52 @@ func TestEmptyBannerFor(t *testing.T) {
 	if !strings.Contains(on3, "3 pending") {
 		t.Errorf("audit-on populated banner should show count, got %q", on3)
 	}
+}
+
+// TestInputHandlerHelpersDoNotDeadlock guards against the tview gotcha where
+// QueueUpdate{,Draw} called from inside an input handler deadlocks: the call
+// blocks waiting for the main event loop to drain the update channel, but
+// the main loop is busy executing the handler. With Application.Run not
+// running here the channel never drains, so a buggy handler hangs forever.
+// A 500ms budget is plenty for a direct primitive mutation; if it trips,
+// somebody re-introduced QueueUpdate inside switchTo or refreshConfig.
+func TestInputHandlerHelpersDoNotDeadlock(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(a *App)
+	}{
+		{"refreshConfig", func(a *App) { a.refreshConfig() }},
+		{"switchTo other page", func(a *App) { a.switchTo(pageHelp) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp()
+			done := make(chan struct{})
+			go func() {
+				tc.run(a)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("%s blocked — likely QueueUpdate{,Draw} called from input-handler context", tc.name)
+			}
+		})
+	}
+}
+
+func newTestApp() *App {
+	a := &App{
+		app:         tview.NewApplication(),
+		pages:       tview.NewPages(),
+		statusBar:   tview.NewTextView(),
+		configView:  tview.NewTextView(),
+		currentPage: pageActivity,
+	}
+	a.pages.AddPage(pageActivity, tview.NewBox(), true, true)
+	a.pages.AddPage(pageEscalations, tview.NewBox(), true, false)
+	a.pages.AddPage(pageHelp, tview.NewBox(), true, false)
+	return a
 }
 
 func TestMinMax(t *testing.T) {
