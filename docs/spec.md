@@ -215,7 +215,7 @@ The TUI is organised as a `tview.Pages` tree with three pages — **activity** (
 - **Activity feed**: scrollable list of recent verdicts — tool name, input summary, verdict badge (Approved / Escalated / Denied / Human: Approved / Human: Blocked), reason on expand, timestamp
 - **Latency panel**: rolling average round-trip latency (last 50 requests), sample count, min/max
 - **Config summary**: active endpoint, model, timeout setting
-- **Log peek**: a 1-row borderless line at the bottom showing the most recent daemon log entry (or `log: idle` when there's been no activity). The full multi-line history is preserved internally — focus the log line and press `f` to expand it to a fullscreen scrollback view.
+- **Log peek**: a 3-row bordered slot at the bottom of the right sidebar (below the config panel) showing the most recent daemon log entry (or `idle` when there's been no activity). The full multi-line history is preserved internally — focus the log slot and press `f` to expand it to a fullscreen scrollback view. Sits in the sidebar so it doesn't steal vertical rows from the activity feed.
 
 Any of the four panels can be expanded to a fullscreen view via `f`; press `f` or `Esc` again to collapse back to the split layout. The same primitive is referenced by both the embedded layout and the fullscreen container — only the visible Pages page draws, so there's no layout collision.
 

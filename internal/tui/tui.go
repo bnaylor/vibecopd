@@ -256,7 +256,10 @@ func (a *App) buildActivityPage() tview.Primitive {
 		SetScrollable(true)
 	a.latencyView.SetTitle("latency").SetBorder(true)
 	a.latencyView.SetText("waiting for data...")
-	rightPanel.AddItem(a.latencyView, 0, 1, false)
+	// Latency renders 3 content lines (avg / min / max); fix the slot
+	// to 5 rows (border + 3 + border) so it stops claiming half the
+	// sidebar by weight when config has more to show.
+	rightPanel.AddItem(a.latencyView, 5, 0, false)
 
 	a.configView = tview.NewTextView().
 		SetDynamicColors(true).
@@ -266,7 +269,25 @@ func (a *App) buildActivityPage() tview.Primitive {
 		SetWordWrap(true)
 	a.configView.SetTitle("config").SetBorder(true)
 	a.configView.SetText("waiting for data...")
+	// Config takes whatever vertical space the sidebar has left after
+	// the fixed-size latency and log slots.
 	rightPanel.AddItem(a.configView, 0, 1, false)
+
+	// Log slot lives at the bottom of the right sidebar — keeps it
+	// compact and out of the activity feed's row budget. The borders
+	// of the config (above) and log (below) sit on adjacent rows so
+	// they read as a continuous boundary even though tview draws each
+	// box's frame independently. 3 rows total: border + 1 content row
+	// + border. Press `f` while focused to expand to a multi-row
+	// scrollback view.
+	a.logView = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft).
+		SetScrollable(true).
+		SetWrap(false)
+	a.logView.SetTitle("log").SetBorder(true)
+	a.logView.SetText("[gray]idle  ([white]f[gray] to expand)[white]")
+	rightPanel.AddItem(a.logView, 3, 0, false)
 
 	a.activity = tview.NewList().ShowSecondaryText(true)
 	a.activity.SetTitle("activity").SetBorder(true)
@@ -277,26 +298,12 @@ func (a *App) buildActivityPage() tview.Primitive {
 	// keys. Pages.SwitchToPage re-runs Focus() on the visible page and
 	// delegates down through Flexes via the per-item Focus flag — so the
 	// chain has to be marked end-to-end (middle: true, activity: true).
+	// Activity now spans the full page height (no separate bottom log
+	// row stealing rows) so this is the only horizontal split.
 	middle := tview.NewFlex().
 		AddItem(a.activity, 0, 3, true).
 		AddItem(rightPanel, 0, 2, false)
 	flex.AddItem(middle, 0, 1, true)
-
-	// Log slot is the smallest bordered TextView that still shows a
-	// content row: 3 lines total (border + 1 content row + border).
-	// Way less than the original 7-row tail but keeps the same border /
-	// title styling as the other panes, so the focus-highlight
-	// callback has a border to recolor and the user can see where the
-	// pane lives even when there's no log activity. Press `f` while
-	// focused to expand to a multi-row scrollback view.
-	a.logView = tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft).
-		SetScrollable(true).
-		SetWrap(false)
-	a.logView.SetTitle("log").SetBorder(true)
-	a.logView.SetText("[gray]idle  ([white]f[gray] to expand)[white]")
-	flex.AddItem(a.logView, 3, 0, false)
 
 	// Cycle order: list first (most-used), then sidebar top-to-bottom,
 	// then log. Yellow border highlights the focused panel.
