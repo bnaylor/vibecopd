@@ -61,6 +61,24 @@ Speed matters — `vibecop` is in your agent's critical path. Measured on M4 Pro
 
 ---
 
+## Building from source
+
+Requires Go 1.25+ (see `go.mod` for the current toolchain version).
+
+```sh
+go build -o ./vibecop ./cmd/vibecop
+```
+
+No CGO, external libraries, or build tags needed. The binary is statically linked by default.
+
+To install directly into your `$GOPATH`:
+
+```sh
+go install ./cmd/vibecop
+```
+
+---
+
 ## Quickstart
 
 **First run —** just run any command. There's nothing to install first:
