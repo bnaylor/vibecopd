@@ -90,8 +90,8 @@ func TestPermissionRequest(t *testing.T) {
 }
 
 func TestPermissionRequestNoHandler(t *testing.T) {
-		dir := shortTempDir(t)
-		socketPath := filepath.Join(dir, "d.sock")
+	dir := shortTempDir(t)
+	socketPath := filepath.Join(dir, "d.sock")
 	cfg := config.DefaultConfig()
 	d := New(socketPath, cfg)
 	// No handler registered.

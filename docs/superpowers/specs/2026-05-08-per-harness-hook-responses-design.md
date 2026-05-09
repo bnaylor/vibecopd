@@ -55,7 +55,7 @@ Emit the correct **per-harness JSON response** on stdout so that `approve` actua
 | `codex`, `PreToolUse`        | (no stdout — Codex PreToolUse cannot allow; PermissionRequest is the approval channel)                                 | same JSON shape as Claude PreToolUse deny + stderr                                                                           | (no stdout)  |
 | `codex`, `PermissionRequest` | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`                         | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"…"}}}` + stderr         | (no stdout)  |
 | `gemini`, `BeforeTool`       | `{"decision":"allow","reason":"…"}`                                                                                    | `{"decision":"deny","reason":"…"}` + stderr                                                                                  | (no stdout)  |
-| `copilot`, `preToolUse`      | `{"permissionDecision":"allow","permissionDecisionReason":"…"}`                                                        | `{"permissionDecision":"deny","permissionDecisionReason":"…"}` + stderr                                                      | (no stdout)  |
+| `copilot`, `preToolUse`      | `{"permissionDecision":"allow"}`                                                                                       | `{"permissionDecision":"deny","permissionDecisionReason":"…"}` + stderr                                                      | (no stdout)  |
 
 The `permissionDecisionReason` / `reason` / `message` fields are omitted from JSON when the daemon's reason is empty.
 

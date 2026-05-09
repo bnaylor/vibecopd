@@ -18,12 +18,16 @@ type ClaudeCodePayload struct {
 	Cwd           string         `json:"cwd,omitempty"`
 }
 
-// GeminiCLIPayload is a Gemini CLI before_tool hook payload.
+// GeminiCLIPayload is a Gemini CLI BeforeTool hook payload.
+//
+// Same snake_case shape as Claude — the canonical reference is
+// https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md.
 type GeminiCLIPayload struct {
-	HookEventName string `json:"hook_event_name,omitempty"`
-	Tool          string `json:"tool"`
-	Input         string `json:"input"`
-	Project       string `json:"project,omitempty"`
+	HookEventName string         `json:"hook_event_name,omitempty"`
+	ToolName      string         `json:"tool_name"`
+	ToolInput     map[string]any `json:"tool_input"`
+	Cwd           string         `json:"cwd,omitempty"`
+	SessionID     string         `json:"session_id,omitempty"`
 }
 
 // CodexPayload is a Codex CLI PreToolUse / PermissionRequest hook payload.
@@ -135,29 +139,30 @@ func DetectAndParse(r io.Reader, harnessHint string) (*NormalizedRequest, string
 		return nil, HarnessUnknown, fmt.Errorf("unrecognized payload format: %s", truncate(raw, 200))
 	}
 
-	// Codex: hook_event_name == "PermissionRequest" is the unambiguous
-	// signal — only Codex emits that event. Otherwise Codex-distinctive
-	// fields (turn_id / transcript_path / model) tell us Codex even when
-	// hook_event_name is "PreToolUse" (which Claude also uses).
-	if eventName := stringField(probe, "hook_event_name"); eventName == EventPermissionRequest ||
-		(eventName == EventPreToolUse && hasAnyKey(probe, "turn_id", "transcript_path", "model")) {
-		return parseWithFormat(raw, HarnessCodex)
-	}
-
-	// Copilot: camelCase toolName and toolArgs distinguish it from snake_case
+	// Copilot: camelCase toolName distinguishes it from the snake_case
 	// payloads. No hook_event_name on the wire.
 	if _, ok := probe["toolName"]; ok {
 		return parseWithFormat(raw, HarnessCopilot)
 	}
 
-	// Claude Code: snake_case tool_name + tool_input.
+	// Claude / Codex / Gemini all use snake_case tool_name + tool_input.
+	// Disambiguate by hook_event_name, with a Codex-vs-Claude fallback for
+	// PreToolUse (which both honor) keyed on turn_id — the one Codex-only
+	// field. transcript_path and model overlap with Claude in newer versions.
 	if _, ok := probe["tool_name"]; ok {
-		return parseWithFormat(raw, HarnessClaude)
-	}
-
-	// Gemini CLI: bare "tool" + "input".
-	if _, ok := probe["tool"]; ok {
-		return parseWithFormat(raw, HarnessGemini)
+		switch stringField(probe, "hook_event_name") {
+		case EventPermissionRequest:
+			return parseWithFormat(raw, HarnessCodex)
+		case EventBeforeTool:
+			return parseWithFormat(raw, HarnessGemini)
+		case EventPreToolUse:
+			if _, ok := probe["turn_id"]; ok {
+				return parseWithFormat(raw, HarnessCodex)
+			}
+			return parseWithFormat(raw, HarnessClaude)
+		default:
+			return parseWithFormat(raw, HarnessClaude)
+		}
 	}
 
 	return nil, HarnessUnknown, fmt.Errorf("unrecognized payload format: %s", truncate(raw, 200))
@@ -179,8 +184,8 @@ func parseWithFormat(raw, harness string) (*NormalizedRequest, string, error) {
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			return nil, harness, fmt.Errorf("gemini payload: %w", err)
 		}
-		if p.Tool == "" {
-			return nil, harness, fmt.Errorf("gemini payload missing tool")
+		if p.ToolName == "" {
+			return nil, harness, fmt.Errorf("gemini payload missing tool_name")
 		}
 		return normalizeGeminiCLI(p), harness, nil
 	case HarnessCodex:
@@ -228,15 +233,15 @@ func normalizeClaudeCode(p ClaudeCodePayload) *NormalizedRequest {
 
 func normalizeGeminiCLI(p GeminiCLIPayload) *NormalizedRequest {
 	nr := &NormalizedRequest{
-		Tool:  p.Tool,
-		Input: p.Input,
+		Tool:  p.ToolName,
+		Input: toolInputSummary(p.ToolInput),
 		Event: p.HookEventName,
 	}
 	if nr.Event == "" {
 		nr.Event = defaultEventFor(HarnessGemini)
 	}
-	if p.Project != "" {
-		nr.ProjectPath = p.Project
+	if p.Cwd != "" {
+		nr.ProjectPath = p.Cwd
 	} else {
 		nr.ProjectPath = detectProjectDir()
 	}
@@ -249,8 +254,9 @@ func normalizeCodex(p CodexPayload) *NormalizedRequest {
 		Input: toolInputSummary(p.ToolInput),
 		Event: p.HookEventName,
 	}
-	// Codex always sends hook_event_name; if it's missing we still try the
-	// PreToolUse default rather than failing — fail-open is the contract.
+	// Codex documents hook_event_name as always present
+	// (developers.openai.com/codex/hooks); we still default to PreToolUse on
+	// absence rather than rejecting, to honor fail-open.
 	if nr.Event == "" {
 		nr.Event = EventPreToolUse
 	}
@@ -350,13 +356,4 @@ func stringField(m map[string]json.RawMessage, key string) string {
 		return ""
 	}
 	return s
-}
-
-func hasAnyKey(m map[string]json.RawMessage, keys ...string) bool {
-	for _, k := range keys {
-		if _, ok := m[k]; ok {
-			return true
-		}
-	}
-	return false
 }

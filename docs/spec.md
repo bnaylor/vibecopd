@@ -188,11 +188,13 @@ After subscribing, the daemon streams newline-terminated event objects to the TU
 }
 ```
 
-**Gemini CLI** (`~/.gemini/settings.json` — equivalent hook config):
+**Gemini CLI** (`~/.gemini/settings.json` — `BeforeTool` (PascalCase) hook, array of matcher groups, same shape as Claude):
 ```json
 {
   "hooks": {
-    "before_tool": "vibecop hook"
+    "BeforeTool": [
+      { "hooks": [{ "type": "command", "command": "vibecop hook" }] }
+    ]
   }
 }
 ```

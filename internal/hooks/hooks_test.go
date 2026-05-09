@@ -74,9 +74,10 @@ func TestDetectClaudeCodeRead(t *testing.T) {
 
 func TestDetectGeminiCLI(t *testing.T) {
 	input := `{
-		"tool": "Bash",
-		"input": "go test ./...",
-		"project": "/Users/test/src/my-project"
+		"hook_event_name": "BeforeTool",
+		"tool_name": "Bash",
+		"tool_input": { "command": "go test ./..." },
+		"cwd": "/Users/test/src/my-project"
 	}`
 
 	nr, harness, err := DetectAndParse(strings.NewReader(input), "")
@@ -95,15 +96,22 @@ func TestDetectGeminiCLI(t *testing.T) {
 	if nr.ProjectPath != "/Users/test/src/my-project" {
 		t.Errorf("expected /Users/test/src/my-project, got %s", nr.ProjectPath)
 	}
+	if nr.Event != EventBeforeTool {
+		t.Errorf("expected event BeforeTool, got %s", nr.Event)
+	}
 }
 
 func TestDetectWithHint(t *testing.T) {
-	// Valid Gemini payload forced as Claude — should fail.
-	input := `{ "tool": "Bash", "input": "echo hi" }`
+	// Valid Gemini payload forced as Claude — should still parse, since
+	// both share the snake_case shape; the hint forces claude harness.
+	input := `{ "hook_event_name": "BeforeTool", "tool_name": "Bash", "tool_input": { "command": "echo hi" } }`
 
-	_, _, err := DetectAndParse(strings.NewReader(input), HarnessClaude)
-	if err == nil {
-		t.Fatal("expected error when parsing gemini payload as claude")
+	_, harness, err := DetectAndParse(strings.NewReader(input), HarnessClaude)
+	if err != nil {
+		t.Fatalf("hint parse failed: %v", err)
+	}
+	if harness != HarnessClaude {
+		t.Errorf("hint should force claude, got %s", harness)
 	}
 }
 
@@ -254,13 +262,29 @@ func TestDetectCopilotMalformedToolArgs(t *testing.T) {
 }
 
 func TestDetectGeminiSetsBeforeToolEvent(t *testing.T) {
-	input := `{ "tool": "Bash", "input": "go test ./..." }`
-	nr, _, err := DetectAndParse(strings.NewReader(input), "")
+	input := `{ "hook_event_name": "BeforeTool", "tool_name": "Bash", "tool_input": {} }`
+	nr, harness, err := DetectAndParse(strings.NewReader(input), "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if harness != HarnessGemini {
+		t.Errorf("expected gemini, got %s", harness)
+	}
 	if nr.Event != EventBeforeTool {
 		t.Errorf("expected default BeforeTool, got %s", nr.Event)
+	}
+}
+
+func TestDetectClaudeWhenNoHookEventName(t *testing.T) {
+	// snake_case payload with tool_name and no hook_event_name → Claude
+	// (Claude's payload sometimes omits the field on older versions).
+	input := `{ "tool_name": "Bash", "tool_input": { "command": "ls" } }`
+	_, harness, err := DetectAndParse(strings.NewReader(input), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if harness != HarnessClaude {
+		t.Errorf("expected claude default, got %s", harness)
 	}
 }
 

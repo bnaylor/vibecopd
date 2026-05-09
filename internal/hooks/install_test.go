@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,11 +70,8 @@ func TestInstallClaudeHooksIdempotent(t *testing.T) {
 }
 
 func TestInstallGeminiHooks(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
 
 	if err := InstallHooks(HarnessGemini, ""); err != nil {
 		t.Fatal(err)
@@ -90,8 +88,43 @@ func TestInstallGeminiHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.Hooks == nil || cfg.Hooks.BeforeTool != "vibecop hook" {
-		t.Errorf("expected before_tool 'vibecop hook', got %q", cfg.Hooks.BeforeTool)
+	if cfg.Hooks == nil || len(cfg.Hooks.BeforeTool) != 1 {
+		t.Fatalf("expected one BeforeTool entry, got %#v", cfg.Hooks)
+	}
+	got := cfg.Hooks.BeforeTool[0]
+	if len(got.Hooks) != 1 || got.Hooks[0].Type != "command" || got.Hooks[0].Command != "vibecop hook" {
+		t.Errorf("unexpected BeforeTool entry: %#v", got)
+	}
+
+	// Confirm raw JSON uses PascalCase wire key, not legacy snake_case.
+	if !bytes.Contains(data, []byte("\"BeforeTool\"")) {
+		t.Errorf("expected PascalCase BeforeTool key in raw JSON: %s", string(data))
+	}
+	if bytes.Contains(data, []byte("\"before_tool\"")) {
+		t.Errorf("legacy before_tool key leaked into raw JSON: %s", string(data))
+	}
+}
+
+func TestInstallGeminiHooksMigratesLegacyBeforeToolKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
+
+	geminiDir := filepath.Join(tmpHome, ".gemini")
+	os.MkdirAll(geminiDir, 0755)
+	// Write the legacy snake_case form a previous vibecop install would have left.
+	os.WriteFile(filepath.Join(geminiDir, "settings.json"),
+		[]byte(`{"hooks":{"before_tool":"vibecop hook","other":"keep"}}`), 0644)
+
+	if err := InstallHooks(HarnessGemini, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(geminiDir, "settings.json"))
+	if bytes.Contains(data, []byte("before_tool")) {
+		t.Errorf("legacy before_tool key not removed: %s", string(data))
+	}
+	if !bytes.Contains(data, []byte("BeforeTool")) {
+		t.Errorf("PascalCase BeforeTool not written: %s", string(data))
 	}
 }
 
@@ -137,11 +170,8 @@ func TestUninstallClaudeHooks(t *testing.T) {
 }
 
 func TestUninstallGeminiHooks(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
 
 	InstallHooks(HarnessGemini, "")
 	if err := UninstallHooks(HarnessGemini); err != nil {
@@ -156,8 +186,8 @@ func TestUninstallGeminiHooks(t *testing.T) {
 	if _, ok := raw["hooks"]; ok {
 		var cfg geminiSettings
 		json.Unmarshal(data, &cfg)
-		if cfg.Hooks != nil && cfg.Hooks.BeforeTool != "" {
-			t.Error("expected empty before_tool after uninstall")
+		if cfg.Hooks != nil && len(cfg.Hooks.BeforeTool) > 0 {
+			t.Error("expected empty BeforeTool after uninstall")
 		}
 	}
 }
@@ -445,11 +475,8 @@ func TestUninstallClaudeHooksRemovesCustomPath(t *testing.T) {
 }
 
 func TestInstallGeminiHooksCustomPath(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
 
 	custom := "/opt/vibecop"
 	if err := InstallHooks(HarnessGemini, custom); err != nil {
@@ -460,17 +487,14 @@ func TestInstallGeminiHooksCustomPath(t *testing.T) {
 	var cfg geminiSettings
 	json.Unmarshal(data, &cfg)
 	want := custom + " hook"
-	if cfg.Hooks == nil || cfg.Hooks.BeforeTool != want {
-		t.Errorf("expected before_tool %q, got %q", want, cfg.Hooks.BeforeTool)
+	if cfg.Hooks == nil || len(cfg.Hooks.BeforeTool) != 1 || cfg.Hooks.BeforeTool[0].Hooks[0].Command != want {
+		t.Errorf("expected single BeforeTool entry with command %q, got %#v", want, cfg.Hooks)
 	}
 }
 
 func TestInstallGeminiHooksReplacesOnPathChange(t *testing.T) {
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-
-	tmpHome := t.TempDir()
-	os.Setenv("HOME", tmpHome)
+	t.Setenv("HOME", t.TempDir())
+	tmpHome := os.Getenv("HOME")
 
 	if err := InstallHooks(HarnessGemini, ""); err != nil {
 		t.Fatal(err)
@@ -484,8 +508,8 @@ func TestInstallGeminiHooksReplacesOnPathChange(t *testing.T) {
 	var cfg geminiSettings
 	json.Unmarshal(data, &cfg)
 	want := custom + " hook"
-	if cfg.Hooks.BeforeTool != want {
-		t.Errorf("before_tool = %q, want %q", cfg.Hooks.BeforeTool, want)
+	if len(cfg.Hooks.BeforeTool) != 1 || cfg.Hooks.BeforeTool[0].Hooks[0].Command != want {
+		t.Errorf("expected single BeforeTool entry with command %q after replace, got %#v", want, cfg.Hooks)
 	}
 }
 
@@ -509,8 +533,8 @@ func TestUninstallGeminiHooksRemovesCustomPath(t *testing.T) {
 	if _, ok := raw["hooks"]; ok {
 		var cfg geminiSettings
 		json.Unmarshal(data, &cfg)
-		if cfg.Hooks != nil && cfg.Hooks.BeforeTool != "" {
-			t.Errorf("expected empty before_tool after uninstall, got %q", cfg.Hooks.BeforeTool)
+		if cfg.Hooks != nil && len(cfg.Hooks.BeforeTool) > 0 {
+			t.Errorf("expected empty BeforeTool after uninstall, got %#v", cfg.Hooks)
 		}
 	}
 }
@@ -829,7 +853,7 @@ func TestInstallCopilotPreservesExtraKeys(t *testing.T) {
 	os.MkdirAll(copilotDir, 0755)
 
 	existing := map[string]any{
-		"version": 1,
+		"version":         1,
 		"someUserSetting": "yes",
 		"hooks": map[string]any{
 			"preToolUse": []map[string]any{

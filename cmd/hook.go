@@ -77,7 +77,7 @@ If the daemon is unreachable, exits 0 silently (fail-open).`,
 		}
 
 		os.Exit(hooks.WriteVerdict(detected, nr.Event, resp, os.Stdout, os.Stderr))
-		return nil
+		return nil // unreachable; cobra signature requires it
 	},
 }
 

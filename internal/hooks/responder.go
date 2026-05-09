@@ -134,6 +134,9 @@ func marshalSafe(v any) []byte {
 }
 
 // --- Claude / Codex PreToolUse shape ---
+//
+// Claude Code:  https://code.claude.com/docs/en/hooks
+// Codex CLI:    https://developers.openai.com/codex/hooks
 
 type claudePreToolHookOutput struct {
 	HookSpecificOutput claudePreToolInner `json:"hookSpecificOutput"`
@@ -156,6 +159,8 @@ func claudePreToolDecision(decision, reason string) claudePreToolHookOutput {
 }
 
 // --- Codex PermissionRequest shape ---
+//
+// https://developers.openai.com/codex/hooks
 
 type codexPermReqOutput struct {
 	HookSpecificOutput codexPermReqInner `json:"hookSpecificOutput"`
@@ -190,6 +195,8 @@ func codexPermReqDeny(reason string) codexPermReqOutput {
 }
 
 // --- Gemini BeforeTool shape ---
+//
+// https://geminicli.com/docs/hooks/reference/
 
 type geminiOutput struct {
 	Decision string `json:"decision"`
@@ -201,6 +208,8 @@ func geminiDecision(decision, reason string) geminiOutput {
 }
 
 // --- Copilot preToolUse shape ---
+//
+// https://docs.github.com/en/copilot/reference/hooks-configuration
 
 type copilotAllowOutput struct {
 	PermissionDecision string `json:"permissionDecision"`

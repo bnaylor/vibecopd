@@ -130,7 +130,7 @@ func TestWriteVerdict(t *testing.T) {
 		{
 			name:    "copilot preToolUse approve",
 			harness: HarnessCopilot, event: EventCopilotPreToolUse,
-			verdict:    daemon.Verdict{Verdict: "approve", Reason: "ignored on allow"},
+			verdict: daemon.Verdict{Verdict: "approve", Reason: "ignored on allow"},
 			// Documented Copilot allow form omits reason.
 			wantStdout: `{"permissionDecision":"allow"}`,
 		},
